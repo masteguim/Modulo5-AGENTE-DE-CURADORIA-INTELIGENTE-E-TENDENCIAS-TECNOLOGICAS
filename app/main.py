@@ -1,23 +1,24 @@
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
+from app.curadoria import buscar_artigos
 
 app = FastAPI(title='Agente de Curadoria')
 
 class ConsultaEntrada(BaseModel):
     pergunta: str = Field(min_length = 1)
 
-class ArquivoRelacionado(BaseModel):
-    caminho: str
-    motivo: str
+class Artigo(BaseModel):
+    titulo: str
+    link: str
 
 class ConsultaResposta(BaseModel):
     pergunta: str
-    arquivos: list[ArquivoRelacionado]
+    artigos: list[Artigo]
 
 @app.post("/consultas", response_model=ConsultaResposta)
 def consultar(dados: ConsultaEntrada):
 
     return ConsultaResposta(
         pergunta=dados.pergunta,
-        arquivos=[],
+        artigos=buscar_artigos(dados.pergunta),
     )
