@@ -14,6 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class ConsultaEntrada(BaseModel):
     pergunta: str = Field(min_length = 1)
 
