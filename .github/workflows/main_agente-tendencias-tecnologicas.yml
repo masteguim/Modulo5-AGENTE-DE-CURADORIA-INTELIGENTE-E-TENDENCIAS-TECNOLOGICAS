@@ -34,7 +34,7 @@ jobs:
         run: ruff check app test
 
       - name: Testes automatizados
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Verificar vulnerabilidades das dependências
         run: pip-audit -r requirements.txt
