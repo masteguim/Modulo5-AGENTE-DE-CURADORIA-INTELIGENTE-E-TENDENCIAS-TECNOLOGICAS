@@ -31,7 +31,7 @@ jobs:
           python -m pip install pytest httpx ruff pip-audit
 
       - name: Lint
-        run: ruff check app tests
+        run: ruff check app test
 
       - name: Testes automatizados
         run: pytest -q
