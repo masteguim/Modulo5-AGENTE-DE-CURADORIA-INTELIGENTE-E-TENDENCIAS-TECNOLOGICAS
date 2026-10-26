@@ -1,7 +1,6 @@
 import json
 from urllib.request import Request, urlopen
 
-
 while True:
     pergunta = input("Pergunta (ou 'sair'): ").strip()
 

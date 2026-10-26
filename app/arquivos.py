@@ -11,8 +11,11 @@ def listar_arquivos() -> list[Path]:
     for caminho in raiz.rglob("*"):
         partes = caminho.relative_to(raiz).parts
 
-        if caminho.is_file() and caminho.suffix.lower() in EXTENSOES:
-            if not any(pasta in PASTAS_IGNORADAS for pasta in partes):
-                encontrados.append(caminho)
+        if (
+            caminho.is_file()
+            and caminho.suffix.lower() in EXTENSOES
+            and not any(pasta in PASTAS_IGNORADAS for pasta in partes)
+        ):
+            encontrados.append(caminho)
 
     return sorted(encontrados)
