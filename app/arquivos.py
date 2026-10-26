@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 EXTENSOES = {".py", ".md", ".txt"}
 PASTAS_IGNORADAS = {".git", ".venv", "venv", "__pycache__"}
 

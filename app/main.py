@@ -4,7 +4,6 @@ from pydantic import BaseModel, Field
 
 from app.curadoria import buscar_artigos
 
-
 app = FastAPI(title="Agente de Curadoria")
 
 app.add_middleware(
