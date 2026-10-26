@@ -45,7 +45,7 @@ jobs:
 
       - name: Enviar artefato para o deploy
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-app
           path: |
