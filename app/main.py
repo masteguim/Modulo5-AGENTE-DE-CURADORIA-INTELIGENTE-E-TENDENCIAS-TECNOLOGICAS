@@ -99,3 +99,4 @@ def feed():
         )
 
     return FeedResposta(**resultado)
+
