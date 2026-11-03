@@ -1,3 +1,4 @@
+
 import logging
 import re
 import unicodedata
@@ -5,7 +6,6 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -14,90 +14,116 @@ from html import unescape
 logger = logging.getLogger(__name__)
 
 ATOM = "{http://www.w3.org/2005/Atom}"
+CONTENT = "{http://purl.org/rss/1.0/modules/content/}"
 
 FONTES_RSS = {
-    "Hacker News": "https://news.ycombinator.com/rss",
-    "GitHub Blog": "https://github.blog/feed/",
-    "React Blog": "https://react.dev/rss.xml",
-    "Python Insider": "https://blog.python.org/rss.xml",
+    "Tecnoblog": {
+        "url": "https://tecnoblog.net/feed/",
+        "idioma": "pt",
+    },
+    "Olhar Digital": {
+        "url": "https://olhardigital.com.br/feed/",
+        "idioma": "pt",
+    },
+    "Hacker News": {
+        "url": "https://news.ycombinator.com/rss",
+        "idioma": "en",
+    },
+    "GitHub Blog": {
+        "url": "https://github.blog/feed/",
+        "idioma": "en",
+    },
+    "React Blog": {
+        "url": "https://react.dev/rss.xml",
+        "idioma": "en",
+    },
+    "Python Insider": {
+        "url": "https://blog.python.org/rss.xml",
+        "idioma": "en",
+    },
 }
 
 LIMITE_POR_FONTE = 10
 LIMITE_RECOMENDACOES = 5
 
-PALAVRAS_IGNORADAS = {
-    "a", "as", "o", "os", "de", "do", "da", "dos",
-    "das", "um", "uma", "uns", "umas", "em",
-    "no", "na", "nos", "nas", "para", "por",
-    "com", "sobre", "quais", "qual", "sao",
-    "que", "como", "me", "mostre", "artigos",
+IGNORADAS = {
+    "a", "as", "o", "os", "de", "da", "do",
+    "das", "dos", "em", "um", "uma", "para",
+    "com", "sobre", "quais", "qual", "que",
+    "como", "sao", "me", "mostre", "artigos",
     "noticias", "novidades", "recentes",
-    "the", "and", "for", "with", "about",
-    "from", "what", "are", "new", "latest",
+    "the", "and", "for", "from", "about",
+    "what", "with", "latest", "news",
 }
+
+TRADUCOES = {
+    "inteligencia": ["intelligence"],
+    "artificial": ["artificial"],
+    "seguranca": ["security"],
+    "programacao": ["programming"],
+    "desenvolvimento": ["development"],
+    "software": ["software"],
+    "computacao": ["computing"],
+    "quantica": ["quantum"],
+    "aprendizado": ["learning"],
+    "maquina": ["machine"],
+    "dados": ["data"],
+    "vulnerabilidade": ["vulnerability"],
+    "vulnerabilidades": ["vulnerabilities"],
+}
+
+
+def limpar_texto(texto):
+    texto = unescape(texto or "")
+    texto = re.sub(r"<[^>]+>", " ", texto)
+    return " ".join(texto.split())
+
+
+def normalizar(texto):
+    texto = unicodedata.normalize(
+        "NFKD", limpar_texto(texto)
+    )
+    texto = "".join(
+        c for c in texto
+        if not unicodedata.combining(c)
+    )
+    return texto.casefold()
+
+
+def extrair_termos(pergunta):
+    palavras = re.findall(
+        r"[a-z0-9+#.]+", normalizar(pergunta)
+    )
+    termos = []
+
+    for palavra in palavras:
+        if palavra in IGNORADAS or len(palavra) < 2:
+            continue
+
+        termos.append(palavra)
+        termos.extend(TRADUCOES.get(palavra, []))
+
+    return list(dict.fromkeys(termos))
 
 
 def baixar_xml(url):
     requisicao = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "AgenteCuradoria/2.2",
-            "Accept": (
-                "application/rss+xml, "
-                "application/atom+xml, "
-                "application/xml, text/xml"
-            ),
+            "User-Agent": "Mozilla/5.0 AgenteCuradoria/2.3",
+            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml",
         },
     )
 
     with urllib.request.urlopen(
-        requisicao,
-        timeout=12,
+        requisicao, timeout=12
     ) as resposta:
         conteudo = resposta.read(2_000_001)
 
     if len(conteudo) > 2_000_000:
-        raise ValueError(
-            "O XML excede o tamanho permitido."
-        )
+        raise ValueError("XML muito grande")
 
     return ET.fromstring(conteudo)
-
-
-def limpar_texto(texto):
-    texto = unescape(texto or "")
-    texto = re.sub(r"<[^>]+>", " ", texto)
-
-    return " ".join(texto.split())
-
-
-def normalizar_texto(texto):
-    texto = unicodedata.normalize(
-        "NFKD",
-        limpar_texto(texto),
-    )
-
-    texto = "".join(
-        caractere
-        for caractere in texto
-        if not unicodedata.combining(caractere)
-    )
-
-    return texto.casefold()
-
-
-def extrair_termos(pergunta):
-    palavras = re.findall(
-        r"[a-z0-9+#.]+",
-        normalizar_texto(pergunta),
-    )
-
-    return list(dict.fromkeys(
-        palavra
-        for palavra in palavras
-        if palavra not in PALAVRAS_IGNORADAS
-        and len(palavra) >= 2
-    ))
 
 
 def converter_data(valor):
@@ -106,7 +132,6 @@ def converter_data(valor):
 
     try:
         data = parsedate_to_datetime(valor)
-
     except (TypeError, ValueError):
         try:
             data = datetime.fromisoformat(
@@ -118,30 +143,12 @@ def converter_data(valor):
     if data.tzinfo is None:
         data = data.replace(tzinfo=timezone.utc)
 
-    return data.astimezone(
-        timezone.utc
-    ).isoformat()
-
-
-def ler_link_atom(entrada):
-    for elemento in entrada.findall(
-        f"{ATOM}link"
-    ):
-        if elemento.get("rel", "alternate") == "alternate":
-            return elemento.get("href", "")
-
-    return entrada.findtext(
-        f"{ATOM}id",
-        default="",
-    )
+    return data.astimezone(timezone.utc).isoformat()
 
 
 def criar_artigo(
-    titulo,
-    link,
-    fonte,
-    data_publicacao=None,
-    resumo="",
+    titulo, link, fonte, idioma,
+    data_publicacao=None, resumo=""
 ):
     titulo = limpar_texto(titulo)
     link = (link or "").strip()
@@ -153,27 +160,44 @@ def criar_artigo(
         "titulo": titulo,
         "link": link,
         "fonte": fonte,
+        "idioma": idioma,
         "data_publicacao": data_publicacao,
         "resumo": limpar_texto(resumo),
     }
 
 
-def buscar_rss(nome, url):
-    raiz = baixar_xml(url)
+def ler_link_atom(entrada):
+    for elemento in entrada.findall(f"{ATOM}link"):
+        if elemento.get("rel", "alternate") == "alternate":
+            return elemento.get("href", "")
+
+    return entrada.findtext(
+        f"{ATOM}id", default=""
+    )
+
+
+def buscar_rss(nome, configuracao):
+    raiz = baixar_xml(configuracao["url"])
+    idioma = configuracao["idioma"]
     artigos = []
 
-    entradas_rss = raiz.findall("./channel/item")
+    entradas = raiz.findall("./channel/item")
 
-    if entradas_rss:
-        for entrada in entradas_rss[:LIMITE_POR_FONTE]:
+    if entradas:
+        for entrada in entradas[:LIMITE_POR_FONTE]:
             artigo = criar_artigo(
                 titulo=entrada.findtext("title"),
                 link=entrada.findtext("link"),
                 fonte=nome,
+                idioma=idioma,
                 data_publicacao=converter_data(
                     entrada.findtext("pubDate")
                 ),
-                resumo=entrada.findtext("description", ""),
+                resumo=(
+                    entrada.findtext("description")
+                    or entrada.findtext(f"{CONTENT}encoded")
+                    or ""
+                ),
             )
 
             if artigo:
@@ -181,15 +205,14 @@ def buscar_rss(nome, url):
 
         return artigos
 
-    entradas_atom = raiz.findall(
-        f"{ATOM}entry"
-    )
+    entradas = raiz.findall(f"{ATOM}entry")
 
-    for entrada in entradas_atom[:LIMITE_POR_FONTE]:
+    for entrada in entradas[:LIMITE_POR_FONTE]:
         artigo = criar_artigo(
             titulo=entrada.findtext(f"{ATOM}title"),
             link=ler_link_atom(entrada),
             fonte=nome,
+            idioma=idioma,
             data_publicacao=converter_data(
                 entrada.findtext(f"{ATOM}published")
                 or entrada.findtext(f"{ATOM}updated")
@@ -223,24 +246,21 @@ def buscar_artigos(pergunta):
     raiz = baixar_xml(url)
     artigos = []
 
-    for entrada in raiz.findall(
-        f"{ATOM}entry"
-    ):
-        link = (
-            entrada.findtext(f"{ATOM}id", default="")
-            .replace("http://", "https://", 1)
-        )
+    for entrada in raiz.findall(f"{ATOM}entry"):
+        link = entrada.findtext(
+            f"{ATOM}id", default=""
+        ).replace("http://", "https://", 1)
 
         artigo = criar_artigo(
             titulo=entrada.findtext(f"{ATOM}title"),
             link=link,
             fonte="arXiv",
+            idioma="en",
             data_publicacao=converter_data(
                 entrada.findtext(f"{ATOM}published")
             ),
             resumo=entrada.findtext(
-                f"{ATOM}summary",
-                default="",
+                f"{ATOM}summary", default=""
             ),
         )
 
@@ -257,23 +277,11 @@ def remover_duplicados(artigos):
     for artigo in artigos:
         link = artigo["link"].rstrip("/")
 
-        if link in links:
-            continue
-
-        links.add(link)
-        resultado.append(artigo)
+        if link not in links:
+            resultado.append(artigo)
+            links.add(link)
 
     return resultado
-
-
-def ordenar_por_data(artigos):
-    return sorted(
-        artigos,
-        key=lambda artigo: (
-            artigo.get("data_publicacao") or ""
-        ),
-        reverse=True,
-    )
 
 
 def coletar_fontes(termo_arxiv):
@@ -283,17 +291,17 @@ def coletar_fontes(termo_arxiv):
         )
     }
 
-    for nome, url in FONTES_RSS.items():
+    for nome, config in FONTES_RSS.items():
         tarefas[nome] = (
-            lambda nome=nome, url=url:
-            buscar_rss(nome, url)
+            lambda nome=nome, config=config:
+            buscar_rss(nome, config)
         )
 
     resultados = {}
     indisponiveis = []
 
     with ThreadPoolExecutor(
-        max_workers=5
+        max_workers=len(tarefas)
     ) as executor:
         futuros = {
             executor.submit(funcao): nome
@@ -305,14 +313,11 @@ def coletar_fontes(termo_arxiv):
 
             try:
                 resultados[nome] = futuro.result()
-
             except Exception as erro:
                 logger.warning(
-                    "Falha ao consultar %s: %s",
-                    nome,
-                    erro,
+                    "Fonte indisponível %s: %s",
+                    nome, erro
                 )
-
                 resultados[nome] = []
                 indisponiveis.append(nome)
 
@@ -330,124 +335,81 @@ def coletar_fontes(termo_arxiv):
     }
 
 
-def calcular_relevancia(artigo, termos):
-    if not termos:
-        return 0
-
-    titulo = normalizar_texto(
-        artigo["titulo"]
-    )
-
-    resumo = normalizar_texto(
-        artigo.get("resumo", "")
-    )
-
+def pontuar_artigo(artigo, termos):
+    titulo = normalizar(artigo["titulo"])
+    resumo = normalizar(artigo.get("resumo", ""))
     pontos = 0
 
     for termo in termos:
-        padrao = (
-            r"(?<!\w)"
-            + re.escape(termo)
-            + r"(?!\w)"
-        )
+        padrao = r"(?<!\w)" + re.escape(termo) + r"(?!\w)"
 
         if re.search(padrao, titulo):
             pontos += 3
-
         elif re.search(padrao, resumo):
             pontos += 1
 
     return pontos
 
 
-def selecionar_recomendacoes(artigos, pergunta):
-    termos = extrair_termos(pergunta)
-
-    artigos_rss = []
-    artigos_arxiv = []
+def selecionar_artigos(artigos, limite=5):
+    grupos = {"pt": [], "en": []}
 
     for artigo in artigos:
-        if artigo["fonte"] == "arXiv":
-            artigos_arxiv.append(artigo)
-            continue
+        idioma = artigo.get("idioma", "en")
+        grupos.setdefault(idioma, []).append(artigo)
 
-        pontuacao = calcular_relevancia(
-            artigo,
-            termos,
-        )
+    selecionados = []
+    links = set()
+    fontes = set()
 
-        if pontuacao > 0:
-            artigos_rss.append({
-                **artigo,
-                "_pontuacao": pontuacao,
-            })
+    def adicionar(artigo):
+        if len(selecionados) >= limite:
+            return False
 
-    artigos_rss.sort(
+        if artigo["link"] in links:
+            return False
+
+        selecionados.append(artigo)
+        links.add(artigo["link"])
+        fontes.add(artigo["fonte"])
+        return True
+
+    def preencher(grupo, quantidade):
+        for artigo in grupo:
+            if quantidade <= 0:
+                break
+
+            if artigo["fonte"] not in fontes:
+                if adicionar(artigo):
+                    quantidade -= 1
+
+        for artigo in grupo:
+            if quantidade <= 0:
+                break
+
+            if adicionar(artigo):
+                quantidade -= 1
+
+    preencher(grupos["pt"], min(2, limite))
+
+    preencher(
+        grupos["en"],
+        min(3, limite - len(selecionados))
+    )
+
+    restantes = sorted(
+        artigos,
         key=lambda artigo: (
-            artigo["_pontuacao"],
+            artigo.get("_pontuacao", 0),
             artigo.get("data_publicacao") or "",
         ),
         reverse=True,
     )
 
-    grupos = defaultdict(list)
-
-    for artigo in artigos_rss:
-        grupos[artigo["fonte"]].append(artigo)
-
-    selecionados = []
-    links = set()
-
-    def adicionar(artigo):
-        if len(selecionados) >= LIMITE_RECOMENDACOES:
-            return False
-
-        link = artigo["link"]
-
-        if link in links:
-            return False
-
-        selecionados.append(artigo)
-        links.add(link)
-
-        return True
-
-    if grupos:
-        limite_rss = 3
-
-        while len(selecionados) < limite_rss:
-            adicionou = False
-
-            for fonte in list(grupos):
-                if len(selecionados) >= limite_rss:
-                    break
-
-                if grupos[fonte]:
-                    artigo = grupos[fonte].pop(0)
-                    adicionou = adicionar(artigo) or adicionou
-
-            if not adicionou:
-                break
-
-    for artigo in artigos_arxiv:
-        adicionar(artigo)
-
-    if len(selecionados) < LIMITE_RECOMENDACOES:
-        restantes = sorted(
-            (
-                artigo
-                for grupo in grupos.values()
-                for artigo in grupo
-            ),
-            key=lambda artigo: (
-                artigo["_pontuacao"],
-                artigo.get("data_publicacao") or "",
-            ),
-            reverse=True,
-        )
-
-        for artigo in restantes:
-            adicionar(artigo)
+    preencher(
+        restantes,
+        limite - len(selecionados)
+    )
 
     return [
         {
@@ -464,26 +426,55 @@ def obter_feed():
         "machine learning"
     )
 
-    artigos = ordenar_por_data(
-        resultado["artigos"]
+    artigos = sorted(
+        resultado["artigos"],
+        key=lambda artigo: (
+            artigo.get("data_publicacao") or ""
+        ),
+        reverse=True,
+    )
+
+    selecionados = selecionar_artigos(
+        artigos, LIMITE_RECOMENDACOES
     )
 
     return {
         **resultado,
-        "artigos": artigos,
-        "total": len(artigos),
+        "artigos": selecionados,
+        "total": len(selecionados),
     }
 
 
 def buscar_conteudos(pergunta):
     resultado = coletar_fontes(pergunta)
+    termos = extrair_termos(pergunta)
+    relevantes = []
 
-    artigos = selecionar_recomendacoes(
-        resultado["artigos"],
-        pergunta,
+    for artigo in resultado["artigos"]:
+        pontos = pontuar_artigo(artigo, termos)
+
+        if artigo["fonte"] == "arXiv":
+            pontos = max(pontos, 1)
+
+        if pontos > 0:
+            relevantes.append({
+                **artigo,
+                "_pontuacao": pontos,
+            })
+
+    relevantes.sort(
+        key=lambda artigo: (
+            artigo["_pontuacao"],
+            artigo.get("data_publicacao") or "",
+        ),
+        reverse=True,
+    )
+
+    selecionados = selecionar_artigos(
+        relevantes, LIMITE_RECOMENDACOES
     )
 
     return {
         **resultado,
-        "artigos": artigos,
+        "artigos": selecionados,
     }
