@@ -2,12 +2,12 @@
 import logging
 import re
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from html import unescape
 
@@ -83,17 +83,22 @@ def normalizar(texto):
     texto = unicodedata.normalize(
         "NFKD", limpar_texto(texto)
     )
+
     texto = "".join(
-        c for c in texto
-        if not unicodedata.combining(c)
+        caractere
+        for caractere in texto
+        if not unicodedata.combining(caractere)
     )
+
     return texto.casefold()
 
 
 def extrair_termos(pergunta):
     palavras = re.findall(
-        r"[a-z0-9+#.]+", normalizar(pergunta)
+        r"[a-z0-9+#.]+",
+        normalizar(pergunta),
     )
+
     termos = []
 
     for palavra in palavras:
@@ -111,17 +116,24 @@ def baixar_xml(url):
         url,
         headers={
             "User-Agent": "Mozilla/5.0 AgenteCuradoria/2.3",
-            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml",
+            "Accept": (
+                "application/rss+xml, "
+                "application/atom+xml, "
+                "application/xml, text/xml"
+            ),
         },
     )
 
     with urllib.request.urlopen(
-        requisicao, timeout=12
+        requisicao,
+        timeout=12,
     ) as resposta:
         conteudo = resposta.read(2_000_001)
 
     if len(conteudo) > 2_000_000:
-        raise ValueError("XML muito grande")
+        raise ValueError(
+            "O XML excede o tamanho permitido."
+        )
 
     return ET.fromstring(conteudo)
 
@@ -132,23 +144,27 @@ def converter_data(valor):
 
     try:
         data = parsedate_to_datetime(valor)
+
     except (TypeError, ValueError):
         try:
-            data = datetime.fromisoformat(
-                valor.replace("Z", "+00:00")
-            )
-        except ValueError:
+            data = datetime.fromisoformat(valor)
+
+        except (TypeError, ValueError):
             return None
 
     if data.tzinfo is None:
-        data = data.replace(tzinfo=timezone.utc)
+        data = data.replace(tzinfo=UTC)
 
-    return data.astimezone(timezone.utc).isoformat()
+    return data.astimezone(UTC).isoformat()
 
 
 def criar_artigo(
-    titulo, link, fonte, idioma,
-    data_publicacao=None, resumo=""
+    titulo,
+    link,
+    fonte,
+    idioma,
+    data_publicacao=None,
+    resumo="",
 ):
     titulo = limpar_texto(titulo)
     link = (link or "").strip()
@@ -172,7 +188,8 @@ def ler_link_atom(entrada):
             return elemento.get("href", "")
 
     return entrada.findtext(
-        f"{ATOM}id", default=""
+        f"{ATOM}id",
+        default="",
     )
 
 
@@ -248,7 +265,8 @@ def buscar_artigos(pergunta):
 
     for entrada in raiz.findall(f"{ATOM}entry"):
         link = entrada.findtext(
-            f"{ATOM}id", default=""
+            f"{ATOM}id",
+            default="",
         ).replace("http://", "https://", 1)
 
         artigo = criar_artigo(
@@ -260,7 +278,8 @@ def buscar_artigos(pergunta):
                 entrada.findtext(f"{ATOM}published")
             ),
             resumo=entrada.findtext(
-                f"{ATOM}summary", default=""
+                f"{ATOM}summary",
+                default="",
             ),
         )
 
@@ -286,9 +305,7 @@ def remover_duplicados(artigos):
 
 def coletar_fontes(termo_arxiv):
     tarefas = {
-        "arXiv": lambda: buscar_artigos(
-            termo_arxiv
-        )
+        "arXiv": lambda: buscar_artigos(termo_arxiv)
     }
 
     for nome, config in FONTES_RSS.items():
@@ -313,11 +330,20 @@ def coletar_fontes(termo_arxiv):
 
             try:
                 resultados[nome] = futuro.result()
-            except Exception as erro:
+
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                OSError,
+                ET.ParseError,
+                ValueError,
+            ) as erro:
                 logger.warning(
                     "Fonte indisponível %s: %s",
-                    nome, erro
+                    nome,
+                    erro,
                 )
+
                 resultados[nome] = []
                 indisponiveis.append(nome)
 
@@ -341,10 +367,15 @@ def pontuar_artigo(artigo, termos):
     pontos = 0
 
     for termo in termos:
-        padrao = r"(?<!\w)" + re.escape(termo) + r"(?!\w)"
+        padrao = (
+            r"(?<!\w)"
+            + re.escape(termo)
+            + r"(?!\w)"
+        )
 
         if re.search(padrao, titulo):
             pontos += 3
+
         elif re.search(padrao, resumo):
             pontos += 1
 
@@ -352,7 +383,10 @@ def pontuar_artigo(artigo, termos):
 
 
 def selecionar_artigos(artigos, limite=5):
-    grupos = {"pt": [], "en": []}
+    grupos = {
+        "pt": [],
+        "en": [],
+    }
 
     for artigo in artigos:
         idioma = artigo.get("idioma", "en")
@@ -372,6 +406,7 @@ def selecionar_artigos(artigos, limite=5):
         selecionados.append(artigo)
         links.add(artigo["link"])
         fontes.add(artigo["fonte"])
+
         return True
 
     def preencher(grupo, quantidade):
@@ -379,9 +414,11 @@ def selecionar_artigos(artigos, limite=5):
             if quantidade <= 0:
                 break
 
-            if artigo["fonte"] not in fontes:
-                if adicionar(artigo):
-                    quantidade -= 1
+            if (
+                artigo["fonte"] not in fontes
+                and adicionar(artigo)
+            ):
+                quantidade -= 1
 
         for artigo in grupo:
             if quantidade <= 0:
@@ -390,11 +427,14 @@ def selecionar_artigos(artigos, limite=5):
             if adicionar(artigo):
                 quantidade -= 1
 
-    preencher(grupos["pt"], min(2, limite))
+    preencher(
+        grupos["pt"],
+        min(2, limite),
+    )
 
     preencher(
         grupos["en"],
-        min(3, limite - len(selecionados))
+        min(3, limite - len(selecionados)),
     )
 
     restantes = sorted(
@@ -408,7 +448,7 @@ def selecionar_artigos(artigos, limite=5):
 
     preencher(
         restantes,
-        limite - len(selecionados)
+        limite - len(selecionados),
     )
 
     return [
@@ -435,7 +475,8 @@ def obter_feed():
     )
 
     selecionados = selecionar_artigos(
-        artigos, LIMITE_RECOMENDACOES
+        artigos,
+        LIMITE_RECOMENDACOES,
     )
 
     return {
@@ -451,7 +492,10 @@ def buscar_conteudos(pergunta):
     relevantes = []
 
     for artigo in resultado["artigos"]:
-        pontos = pontuar_artigo(artigo, termos)
+        pontos = pontuar_artigo(
+            artigo,
+            termos,
+        )
 
         if artigo["fonte"] == "arXiv":
             pontos = max(pontos, 1)
@@ -471,7 +515,8 @@ def buscar_conteudos(pergunta):
     )
 
     selecionados = selecionar_artigos(
-        relevantes, LIMITE_RECOMENDACOES
+        relevantes,
+        LIMITE_RECOMENDACOES,
     )
 
     return {
