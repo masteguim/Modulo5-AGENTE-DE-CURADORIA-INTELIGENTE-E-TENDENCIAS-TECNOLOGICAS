@@ -1,10 +1,8 @@
 import re
 from contextlib import asynccontextmanager
-
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-
 from app.alertas import gerar_alertas
 from app.curadoria import (
     buscar_conteudos,
@@ -19,7 +17,6 @@ from app.database import (
     listar_artigos,
 )
 from app.github_stack import detectar_stack
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
