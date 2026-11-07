@@ -1,24 +1,36 @@
 import re
-from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.curadoria import (
     buscar_conteudos,
-    coletar_fontes,
     extrair_termos,
     normalizar,
-    obter_feed,
     pontuar_artigo,
     selecionar_artigos,
 )
+from app.database import (
+    inicializar_banco,
+    listar_artigos,
+    contar_artigos,
+)
 from app.github_stack import detectar_stack
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    inicializar_banco()
+    yield
+
 
 app = FastAPI(
     title="Agente de Curadoria Inteligente",
-    version="3.0.0",
-    description="Curadoria contextual de tendências tecnológicas.",
+    version="3.1.0",
+    description="Curadoria tecnológica com SQLite e GitHub.",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -40,6 +52,7 @@ CATEGORIAS = {
             "machine learning",
             "deep learning",
             "llm",
+            "inteligencia artificial",
         ],
     },
     "desenvolvimento": {
@@ -49,6 +62,7 @@ CATEGORIAS = {
             "python",
             "javascript",
             "react",
+            "programming",
         ],
     },
     "seguranca": {
@@ -58,6 +72,7 @@ CATEGORIAS = {
             "vulnerability",
             "security",
             "cve",
+            "seguranca",
         ],
     },
     "devops": {
@@ -67,6 +82,7 @@ CATEGORIAS = {
             "kubernetes",
             "devops",
             "cloud",
+            "container",
         ],
     },
     "computacao-quantica": {
@@ -75,12 +91,13 @@ CATEGORIAS = {
             "quantum computing",
             "qubit",
             "quantum algorithms",
+            "computacao quantica",
         ],
     },
 }
 
 TERMOS_STACK = {
-    "FastAPI": ["fastapi", "python", "asgi"],
+    "FastAPI": ["fastapi", "asgi", "python"],
     "Flask": ["flask", "python"],
     "Django": ["django", "python"],
     "React": ["react", "reactjs", "react.js"],
@@ -102,12 +119,6 @@ TERMOS_STACK = {
     "Tailwind CSS": ["tailwind", "tailwindcss"],
 }
 
-TERMOS_GERAIS = [
-    "software",
-    "technology",
-    "programming",
-    "development",
-]
 
 class ConsultaEntrada(BaseModel):
     pergunta: str = Field(min_length=1)
@@ -132,24 +143,41 @@ class FeedResposta(BaseModel):
     categoria: str
     repositorio: str | None = None
     stack_detectada: list[str] = Field(default_factory=list)
-    fontes_consultadas: list[str]
-    fontes_indisponiveis: list[str]
+    fontes_consultadas: list[str] = Field(default_factory=list)
+    fontes_indisponiveis: list[str] = Field(default_factory=list)
 
 
 def termos_repositorio(stack):
-    resultado = []
+    termos = []
 
     for tecnologia in stack:
-        resultado.extend(
+        termos.extend(
             TERMOS_STACK.get(tecnologia, [tecnologia])
         )
 
-    return list(dict.fromkeys(resultado))
+    return list(dict.fromkeys(termos))
 
 
-def pontuacao_contextual(artigo, termos, stack):
+def corresponde_termo(conteudo, termo):
+    termo_normalizado = normalizar(termo)
+
+    if not termo_normalizado:
+        return False
+
+    padrao = (
+        r"(?<!\w)"
+        + re.escape(termo_normalizado)
+        + r"(?!\w)"
+    )
+
+    return bool(re.search(padrao, conteudo))
+
+
+def pontuar_recomendacao(artigo, termos, stack):
     conteudo = normalizar(
-        artigo["titulo"] + " " + artigo.get("resumo", "")
+        artigo.get("titulo", "")
+        + " "
+        + artigo.get("resumo", "")
     )
 
     pontos = pontuar_artigo(
@@ -158,12 +186,7 @@ def pontuacao_contextual(artigo, termos, stack):
     )
 
     for termo in termos_repositorio(stack):
-        termo = normalizar(termo)
-
-        if termo and re.search(
-            r"(?<!\w)" + re.escape(termo) + r"(?!\w)",
-            conteudo,
-        ):
+        if corresponde_termo(conteudo, termo):
             pontos += 6
 
     return pontos
@@ -184,60 +207,60 @@ def gerar_feed(categoria, repositorio):
         stack = dados_github["stack_detectada"]
         nome_repositorio = dados_github["repositorio"]
 
-    termos = list(
-        CATEGORIAS.get(categoria, {}).get(
-            "termos", TERMOS_GERAIS
-        )
-    )
+    artigos_banco = listar_artigos(500)
 
-    termos.extend(termos_repositorio(stack))
-    termos = list(dict.fromkeys(termos))
+    if not artigos_banco:
+        return {
+            "artigos": [],
+            "total": 0,
+            "categoria": categoria,
+            "repositorio": nome_repositorio,
+            "stack_detectada": stack,
+            "fontes_consultadas": [],
+            "fontes_indisponiveis": [],
+        }
 
-    consulta = " OR ".join(termos[:6])
+    termos_categoria = CATEGORIAS.get(
+        categoria, {}
+    ).get("termos", [])
 
-    resultado = coletar_fontes(
-        consulta or "software development"
-    )
+    termos = termos_categoria + termos_repositorio(stack)
 
-    if (
-        len(resultado["fontes_indisponiveis"])
-        == len(resultado["fontes_consultadas"])
-    ):
-        raise HTTPException(
-            status_code=502,
-            detail="Todas as fontes estão indisponíveis.",
-        )
+    artigos_pontuados = []
 
-    pontuados = []
-
-    for artigo in resultado["artigos"]:
-        pontos = pontuacao_contextual(
-            artigo, termos, stack
-        )
-
+    for artigo in artigos_banco:
         if categoria != "geral":
-            termos_categoria = CATEGORIAS[categoria]["termos"]
-
-            categoria_relevante = pontuar_artigo(
-                artigo,
-                extrair_termos(" ".join(termos_categoria)),
+            conteudo = normalizar(
+                artigo.get("titulo", "")
+                + " "
+                + artigo.get("resumo", "")
             )
 
-            if categoria_relevante == 0:
+            relevante_categoria = any(
+                corresponde_termo(conteudo, termo)
+                for termo in termos_categoria
+            )
+
+            if not relevante_categoria:
                 continue
 
-        if nome_repositorio and pontos == 0:
-            continue
+        pontos = pontuar_recomendacao(
+            artigo,
+            termos,
+            stack,
+        )
 
-        pontuados.append({
+        artigos_pontuados.append({
             **artigo,
             "_pontuacao": pontos,
         })
 
-    pontuados.sort(
+    artigos_pontuados.sort(
         key=lambda artigo: (
             artigo["_pontuacao"],
-            artigo.get("data_publicacao") or "",
+            artigo.get("data_publicacao")
+            or artigo.get("coletado_em")
+            or "",
         ),
         reverse=True,
     )
@@ -245,9 +268,14 @@ def gerar_feed(categoria, repositorio):
     limite = 10 if categoria == "geral" else 5
 
     artigos = selecionar_artigos(
-        pontuados,
+        artigos_pontuados,
         limite,
     )
+
+    fontes = sorted({
+        artigo["fonte"]
+        for artigo in artigos_banco
+    })
 
     return {
         "artigos": artigos,
@@ -255,8 +283,8 @@ def gerar_feed(categoria, repositorio):
         "categoria": categoria,
         "repositorio": nome_repositorio,
         "stack_detectada": stack,
-        "fontes_consultadas": resultado["fontes_consultadas"],
-        "fontes_indisponiveis": resultado["fontes_indisponiveis"],
+        "fontes_consultadas": fontes,
+        "fontes_indisponiveis": [],
     }
 
 
@@ -264,8 +292,9 @@ def gerar_feed(categoria, repositorio):
 def inicio():
     return {
         "aplicacao": "Agente de Curadoria Inteligente",
-        "versao": "3.0.0",
+        "versao": "3.1.0",
         "status": "online",
+        "artigos_armazenados": contar_artigos(),
     }
 
 
@@ -273,17 +302,33 @@ def inicio():
 def listar_categorias():
     return {
         "categorias": [
-            {"id": chave, "nome": dados["nome"]}
-            for chave, dados in CATEGORIAS.items()
+            {
+                "id": identificador,
+                "nome": dados["nome"],
+            }
+            for identificador, dados in CATEGORIAS.items()
         ]
     }
 
 
 @app.get("/github/stack")
 def analisar_repositorio(
-    repositorio: str = Query(min_length=3, max_length=200),
+    repositorio: str = Query(
+        min_length=3,
+        max_length=200,
+    ),
 ):
     return detectar_stack(repositorio)
+
+
+@app.get("/artigos")
+def artigos_armazenados(
+    limite: int = Query(default=50, ge=1, le=500),
+):
+    return {
+        "total_armazenado": contar_artigos(),
+        "artigos": listar_artigos(limite),
+    }
 
 
 @app.get(
