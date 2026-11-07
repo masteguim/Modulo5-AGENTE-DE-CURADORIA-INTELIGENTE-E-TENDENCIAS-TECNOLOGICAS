@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from app.alertas import gerar_alertas
 from app.curadoria import (
     buscar_conteudos,
     extrair_termos,
@@ -13,9 +14,9 @@ from app.curadoria import (
     selecionar_artigos,
 )
 from app.database import (
+    contar_artigos,
     inicializar_banco,
     listar_artigos,
-    contar_artigos,
 )
 from app.github_stack import detectar_stack
 
@@ -28,8 +29,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Agente de Curadoria Inteligente",
-    version="3.1.0",
-    description="Curadoria tecnológica com SQLite e GitHub.",
+    version="3.2.0",
+    description=(
+        "Curadoria tecnológica, integração GitHub, "
+        "SQLite e monitoramento de segurança."
+    ),
     lifespan=lifespan,
 )
 
@@ -145,6 +149,26 @@ class FeedResposta(BaseModel):
     stack_detectada: list[str] = Field(default_factory=list)
     fontes_consultadas: list[str] = Field(default_factory=list)
     fontes_indisponiveis: list[str] = Field(default_factory=list)
+
+
+class Alerta(BaseModel):
+    titulo: str
+    descricao: str
+    link: str
+    fonte: str
+    gravidade: str
+    tecnologias: list[str]
+    data_publicacao: str | None = None
+    identificado_em: str
+    tipo: str
+
+
+class AlertasResposta(BaseModel):
+    total: int
+    alertas: list[Alerta]
+    stack_monitorada: list[str]
+    artigos_analisados: int
+    repositorio: str | None = None
 
 
 def termos_repositorio(stack):
@@ -292,7 +316,7 @@ def gerar_feed(categoria, repositorio):
 def inicio():
     return {
         "aplicacao": "Agente de Curadoria Inteligente",
-        "versao": "3.1.0",
+        "versao": "3.2.0",
         "status": "online",
         "artigos_armazenados": contar_artigos(),
     }
@@ -340,6 +364,50 @@ def feed(
     repositorio: str | None = None,
 ):
     return gerar_feed(categoria, repositorio)
+
+
+@app.get(
+    "/alertas",
+    response_model=AlertasResposta,
+)
+def listar_alertas(
+    repositorio: str | None = Query(
+        default=None,
+        max_length=200,
+    ),
+    limite: int = Query(
+        default=20,
+        ge=1,
+        le=100,
+    ),
+):
+    stack = []
+    nome_repositorio = None
+
+    if repositorio:
+        dados_github = detectar_stack(repositorio)
+
+        stack = dados_github["stack_detectada"]
+        nome_repositorio = dados_github["repositorio"]
+
+        if not stack:
+            return AlertasResposta(
+                total=0,
+                alertas=[],
+                stack_monitorada=[],
+                artigos_analisados=len(listar_artigos(500)),
+                repositorio=nome_repositorio,
+            )
+
+    resultado = gerar_alertas(
+        stack=stack,
+        limite=limite,
+    )
+
+    return AlertasResposta(
+        **resultado,
+        repositorio=nome_repositorio,
+    )
 
 
 @app.post(
