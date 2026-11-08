@@ -16,7 +16,9 @@ from app.database import (
     inicializar_banco,
     listar_artigos,
 )
+from app.em_alta import gerar_em_alta
 from app.github_stack import detectar_stack
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -26,9 +28,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Agente de Curadoria Inteligente",
-    version="3.2.0",
+    version="3.3.0",
     description=(
-        "Curadoria tecnológica, integração GitHub, "
+        "Curadoria tecnológica, tendências, GitHub, "
         "SQLite e monitoramento de segurança."
     ),
     lifespan=lifespan,
@@ -166,6 +168,31 @@ class AlertasResposta(BaseModel):
     stack_monitorada: list[str]
     artigos_analisados: int
     repositorio: str | None = None
+
+
+class ArtigoEmAlta(BaseModel):
+    titulo: str
+    link: str
+    fonte: str
+    idioma: str
+    resumo: str
+    data_publicacao: str | None = None
+    categoria: str
+    pontuacao: float
+
+
+class CategoriaEmAlta(BaseModel):
+    nome: str
+    quantidade: int
+
+
+class EmAltaResposta(BaseModel):
+    total: int
+    artigos: list[ArtigoEmAlta]
+    categorias: list[CategoriaEmAlta]
+    artigos_analisados: int
+    atualizado_em: str
+    metodo_ranking: str
 
 
 def termos_repositorio(stack):
@@ -313,7 +340,7 @@ def gerar_feed(categoria, repositorio):
 def inicio():
     return {
         "aplicacao": "Agente de Curadoria Inteligente",
-        "versao": "3.2.0",
+        "versao": "3.3.0",
         "status": "online",
         "artigos_armazenados": contar_artigos(),
     }
@@ -344,7 +371,11 @@ def analisar_repositorio(
 
 @app.get("/artigos")
 def artigos_armazenados(
-    limite: int = Query(default=50, ge=1, le=500),
+    limite: int = Query(
+        default=50,
+        ge=1,
+        le=500,
+    ),
 ):
     return {
         "total_armazenado": contar_artigos(),
@@ -404,6 +435,42 @@ def listar_alertas(
     return AlertasResposta(
         **resultado,
         repositorio=nome_repositorio,
+    )
+
+
+@app.get(
+    "/em-alta",
+    response_model=EmAltaResposta,
+)
+def listar_em_alta(
+    limite: int = Query(
+        default=20,
+        ge=1,
+        le=100,
+    ),
+    categoria: str | None = Query(
+        default=None,
+    ),
+):
+    categorias_validas = [
+        "geral",
+        "Inteligência Artificial",
+        "Desenvolvimento",
+        "Segurança",
+        "DevOps",
+        "Computação Quântica",
+        "Outros",
+    ]
+
+    if categoria and categoria not in categorias_validas:
+        raise HTTPException(
+            status_code=400,
+            detail="Categoria inválida.",
+        )
+
+    return gerar_em_alta(
+        limite=limite,
+        categoria=categoria,
     )
 
 
