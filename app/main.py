@@ -21,7 +21,7 @@ from app.database import (
 from app.em_alta import gerar_em_alta
 from app.github_stack import detectar_stack
 from app.monitoramento import monitorar_repositorio
-
+from app.vulnerabilidades_router import router as vulnerabilidades_router
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(vulnerabilidades_router)
 
 CATEGORIAS = {
     "inteligencia-artificial": {
