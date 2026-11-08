@@ -1,5 +1,7 @@
+import logging
 import re
 from contextlib import asynccontextmanager
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -18,6 +20,10 @@ from app.database import (
 )
 from app.em_alta import gerar_em_alta
 from app.github_stack import detectar_stack
+from app.monitoramento import monitorar_repositorio
+
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -28,10 +34,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Agente de Curadoria Inteligente",
-    version="3.3.0",
+    version="3.4.0",
     description=(
         "Curadoria tecnológica, tendências, GitHub, "
-        "SQLite e monitoramento de segurança."
+        "monitoramento de alterações e segurança."
     ),
     lifespan=lifespan,
 )
@@ -120,6 +126,7 @@ TERMOS_STACK = {
     "Angular": ["angular"],
     "Express": ["express", "node.js"],
     "Tailwind CSS": ["tailwind", "tailwindcss"],
+    "Uvicorn": ["uvicorn", "asgi"],
 }
 
 
@@ -146,8 +153,18 @@ class FeedResposta(BaseModel):
     categoria: str
     repositorio: str | None = None
     stack_detectada: list[str] = Field(default_factory=list)
-    fontes_consultadas: list[str] = Field(default_factory=list)
-    fontes_indisponiveis: list[str] = Field(default_factory=list)
+    tecnologias_alteradas: list[str] = Field(
+        default_factory=list
+    )
+    termos_recomendacao: list[str] = Field(
+        default_factory=list
+    )
+    fontes_consultadas: list[str] = Field(
+        default_factory=list
+    )
+    fontes_indisponiveis: list[str] = Field(
+        default_factory=list
+    )
 
 
 class Alerta(BaseModel):
@@ -221,11 +238,16 @@ def corresponde_termo(conteudo, termo):
     return bool(re.search(padrao, conteudo))
 
 
-def pontuar_recomendacao(artigo, termos, stack):
+def pontuar_recomendacao(
+    artigo,
+    termos,
+    stack,
+    termos_alteracoes=None,
+):
     conteudo = normalizar(
-        artigo.get("titulo", "")
+        (artigo.get("titulo") or "")
         + " "
-        + artigo.get("resumo", "")
+        + (artigo.get("resumo") or "")
     )
 
     pontos = pontuar_artigo(
@@ -237,11 +259,68 @@ def pontuar_recomendacao(artigo, termos, stack):
         if corresponde_termo(conteudo, termo):
             pontos += 6
 
+    for termo in termos_alteracoes or []:
+        if corresponde_termo(conteudo, termo):
+            pontos += 12
+
     return pontos
 
 
+def obter_contexto_repositorio(repositorio):
+    dados_stack = detectar_stack(repositorio)
+
+    stack = dados_stack.get(
+        "stack_detectada", []
+    )
+
+    nome_repositorio = dados_stack.get(
+        "repositorio", repositorio
+    )
+
+    tecnologias_alteradas = []
+    termos_alteracoes = []
+
+    try:
+        monitoramento = monitorar_repositorio(
+            nome_repositorio,
+            limite=5,
+        )
+
+        termos_alteracoes = monitoramento.get(
+            "termos_recomendacao", []
+        )
+
+        tecnologias_alteradas = [
+            item["tecnologia"]
+            for item in monitoramento.get(
+                "resumo", {}
+            ).get("tecnologias_alteradas", [])
+        ]
+
+    except (
+        httpx.HTTPError,
+        RuntimeError,
+        ValueError,
+    ) as erro:
+        logger.warning(
+            "Monitoramento indisponível para %s: %s",
+            nome_repositorio,
+            erro,
+        )
+
+    return {
+        "repositorio": nome_repositorio,
+        "stack": stack,
+        "tecnologias_alteradas": tecnologias_alteradas,
+        "termos_alteracoes": termos_alteracoes,
+    }
+
+
 def gerar_feed(categoria, repositorio):
-    if categoria != "geral" and categoria not in CATEGORIAS:
+    if (
+        categoria != "geral"
+        and categoria not in CATEGORIAS
+    ):
         raise HTTPException(
             status_code=400,
             detail="Categoria inválida.",
@@ -249,41 +328,47 @@ def gerar_feed(categoria, repositorio):
 
     stack = []
     nome_repositorio = None
+    tecnologias_alteradas = []
+    termos_alteracoes = []
 
     if repositorio:
-        dados_github = detectar_stack(repositorio)
-        stack = dados_github["stack_detectada"]
-        nome_repositorio = dados_github["repositorio"]
+        contexto = obter_contexto_repositorio(
+            repositorio
+        )
+
+        stack = contexto["stack"]
+        nome_repositorio = contexto["repositorio"]
+
+        tecnologias_alteradas = contexto[
+            "tecnologias_alteradas"
+        ]
+
+        termos_alteracoes = contexto[
+            "termos_alteracoes"
+        ]
 
     artigos_banco = listar_artigos(500)
-
-    if not artigos_banco:
-        return {
-            "artigos": [],
-            "total": 0,
-            "categoria": categoria,
-            "repositorio": nome_repositorio,
-            "stack_detectada": stack,
-            "fontes_consultadas": [],
-            "fontes_indisponiveis": [],
-        }
 
     termos_categoria = CATEGORIAS.get(
         categoria, {}
     ).get("termos", [])
 
-    termos = termos_categoria + termos_repositorio(stack)
+    termos = list(dict.fromkeys(
+        termos_categoria
+        + termos_repositorio(stack)
+        + termos_alteracoes
+    ))
 
     artigos_pontuados = []
 
     for artigo in artigos_banco:
-        if categoria != "geral":
-            conteudo = normalizar(
-                artigo.get("titulo", "")
-                + " "
-                + artigo.get("resumo", "")
-            )
+        conteudo = normalizar(
+            (artigo.get("titulo") or "")
+            + " "
+            + (artigo.get("resumo") or "")
+        )
 
+        if categoria != "geral":
             relevante_categoria = any(
                 corresponde_termo(conteudo, termo)
                 for termo in termos_categoria
@@ -296,6 +381,7 @@ def gerar_feed(categoria, repositorio):
             artigo,
             termos,
             stack,
+            termos_alteracoes,
         )
 
         artigos_pontuados.append({
@@ -313,7 +399,10 @@ def gerar_feed(categoria, repositorio):
         reverse=True,
     )
 
-    limite = 10 if categoria == "geral" else 5
+    limite = (
+        10 if categoria == "geral"
+        else 5
+    )
 
     artigos = selecionar_artigos(
         artigos_pontuados,
@@ -331,6 +420,8 @@ def gerar_feed(categoria, repositorio):
         "categoria": categoria,
         "repositorio": nome_repositorio,
         "stack_detectada": stack,
+        "tecnologias_alteradas": tecnologias_alteradas,
+        "termos_recomendacao": termos_alteracoes,
         "fontes_consultadas": fontes,
         "fontes_indisponiveis": [],
     }
@@ -340,7 +431,7 @@ def gerar_feed(categoria, repositorio):
 def inicio():
     return {
         "aplicacao": "Agente de Curadoria Inteligente",
-        "versao": "3.3.0",
+        "versao": "3.4.0",
         "status": "online",
         "artigos_armazenados": contar_artigos(),
     }
@@ -354,7 +445,8 @@ def listar_categorias():
                 "id": identificador,
                 "nome": dados["nome"],
             }
-            for identificador, dados in CATEGORIAS.items()
+            for identificador, dados
+            in CATEGORIAS.items()
         ]
     }
 
@@ -367,6 +459,45 @@ def analisar_repositorio(
     ),
 ):
     return detectar_stack(repositorio)
+
+
+@app.get("/github/alteracoes")
+def consultar_alteracoes(
+    repositorio: str = Query(
+        min_length=3,
+        max_length=200,
+    ),
+    limite: int = Query(
+        default=5,
+        ge=1,
+        le=20,
+    ),
+):
+    try:
+        return monitorar_repositorio(
+            repositorio,
+            limite=limite,
+        )
+
+    except ValueError as erro:
+        raise HTTPException(
+            status_code=400,
+            detail=str(erro),
+        ) from erro
+
+    except (httpx.HTTPError, RuntimeError) as erro:
+        logger.warning(
+            "Falha no monitoramento: %s",
+            erro,
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Não foi possível consultar "
+                "as alterações no GitHub."
+            ),
+        ) from erro
 
 
 @app.get("/artigos")
@@ -391,7 +522,10 @@ def feed(
     categoria: str = "geral",
     repositorio: str | None = None,
 ):
-    return gerar_feed(categoria, repositorio)
+    return gerar_feed(
+        categoria,
+        repositorio,
+    )
 
 
 @app.get(
@@ -413,17 +547,26 @@ def listar_alertas(
     nome_repositorio = None
 
     if repositorio:
-        dados_github = detectar_stack(repositorio)
+        dados_github = detectar_stack(
+            repositorio
+        )
 
-        stack = dados_github["stack_detectada"]
-        nome_repositorio = dados_github["repositorio"]
+        stack = dados_github[
+            "stack_detectada"
+        ]
+
+        nome_repositorio = dados_github[
+            "repositorio"
+        ]
 
         if not stack:
             return AlertasResposta(
                 total=0,
                 alertas=[],
                 stack_monitorada=[],
-                artigos_analisados=len(listar_artigos(500)),
+                artigos_analisados=len(
+                    listar_artigos(500)
+                ),
                 repositorio=nome_repositorio,
             )
 
@@ -462,7 +605,10 @@ def listar_em_alta(
         "Outros",
     ]
 
-    if categoria and categoria not in categorias_validas:
+    if (
+        categoria
+        and categoria not in categorias_validas
+    ):
         raise HTTPException(
             status_code=400,
             detail="Categoria inválida.",
@@ -479,15 +625,28 @@ def listar_em_alta(
     response_model=ConsultaResposta,
 )
 def consultar(dados: ConsultaEntrada):
-    resultado = buscar_conteudos(dados.pergunta)
+    resultado = buscar_conteudos(
+        dados.pergunta
+    )
+
+    fontes = resultado.get(
+        "fontes_consultadas", []
+    )
+
+    indisponiveis = resultado.get(
+        "fontes_indisponiveis", []
+    )
 
     if (
-        len(resultado["fontes_indisponiveis"])
-        == len(resultado["fontes_consultadas"])
+        fontes
+        and len(indisponiveis) == len(fontes)
     ):
         raise HTTPException(
             status_code=502,
-            detail="Todas as fontes estão indisponíveis.",
+            detail=(
+                "Todas as fontes estão "
+                "indisponíveis."
+            ),
         )
 
     return {
