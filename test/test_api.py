@@ -16,6 +16,12 @@ def usuario_autenticado():
     app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
         subject="usuario-teste",
         access_token="token-teste",
+        profile={
+            "id": "id-teste",
+            "email": "teste@example.com",
+            "display_name": "Usuário de teste",
+            "is_active": True,
+        },
     )
     yield
     app.dependency_overrides.pop(get_current_user, None)
@@ -51,6 +57,115 @@ def test_inicio(monkeypatch):
     assert resposta.json()["versao"] == "3.4.0"
     assert resposta.json()["status"] == "online"
     assert resposta.json()["artigos_armazenados"] == 0
+
+
+def test_login_repassa_formulario_ao_modulo1(monkeypatch):
+    chamadas = {}
+
+    def requisitar(metodo, url, **kwargs):
+        chamadas.update(metodo=metodo, url=url, **kwargs)
+        return type(
+            "Resposta",
+            (),
+            {
+                "status_code": 200,
+                "json": lambda _self: {
+                    "access_token": "token-teste",
+                    "expires_in": 300,
+                },
+            },
+        )()
+
+    monkeypatch.setattr("app.auth.httpx.request", requisitar)
+    resposta = client.post(
+        "/auth/login",
+        json={"username": "teste@example.com", "password": "senha-teste"},
+    )
+
+    assert resposta.status_code == 200
+    assert resposta.json()["access_token"] == "token-teste"
+    assert chamadas["url"].endswith("/auth/token")
+    assert chamadas["data"] == {
+        "username": "teste@example.com",
+        "password": "senha-teste",
+    }
+
+
+def test_mfa_encaminha_um_codigo_de_verificacao(monkeypatch):
+    chamadas = {}
+
+    def requisitar(metodo, url, **kwargs):
+        chamadas.update(metodo=metodo, url=url, **kwargs)
+        return type(
+            "Resposta",
+            (),
+            {
+                "status_code": 200,
+                "json": lambda _self: {"access_token": "token-teste"},
+            },
+        )()
+
+    monkeypatch.setattr("app.auth.httpx.request", requisitar)
+    resposta = client.post(
+        "/auth/mfa/verify",
+        json={"challenge_token": "desafio", "code": "123456"},
+    )
+
+    assert resposta.status_code == 200
+    assert chamadas["json"] == {
+        "challenge_token": "desafio",
+        "code": "123456",
+    }
+
+
+def test_mfa_rejeita_codigo_e_codigo_de_recuperacao_juntos():
+    resposta = client.post(
+        "/auth/mfa/verify",
+        json={
+            "challenge_token": "desafio",
+            "code": "123456",
+            "recovery_code": "recuperacao",
+        },
+    )
+
+    assert resposta.status_code == 422
+
+
+def test_sessao_atual_retorna_apenas_perfil_da_conta():
+    resposta = client.get("/auth/session")
+
+    assert resposta.status_code == 200
+    assert resposta.json() == {
+        "id": "id-teste",
+        "email": "teste@example.com",
+        "display_name": "Usuário de teste",
+        "is_active": True,
+    }
+
+
+def test_logout_preserva_resposta_204_do_modulo1(monkeypatch):
+    chamadas = {}
+
+    def requisitar(metodo, url, **kwargs):
+        chamadas.update(metodo=metodo, url=url, **kwargs)
+        return type(
+            "Resposta",
+            (),
+            {
+                "status_code": 204,
+                "json": lambda _self: (_ for _ in ()).throw(
+                    AssertionError("204 não deve ser decodificado como JSON")
+                ),
+            },
+        )()
+
+    monkeypatch.setattr("app.auth.httpx.request", requisitar)
+    resposta = client.post("/auth/logout")
+
+    assert resposta.status_code == 204
+    assert resposta.content == b""
+    assert chamadas["headers"]["Authorization"] == "Bearer token-teste"
+    assert chamadas["json"] == {}
 
 
 def test_consultar(monkeypatch):

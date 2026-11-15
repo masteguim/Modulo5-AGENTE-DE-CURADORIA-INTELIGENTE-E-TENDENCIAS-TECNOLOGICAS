@@ -39,24 +39,27 @@ usuário não são armazenadas.
 - Persistência de artigos, consultas e histórico de conversas por usuário.
 - Autenticação com JWT RS256 do Módulo 1, validação por JWKS e confirmação
   da sessão em `/auth/me`.
+- Proxy de login, MFA, renovação de token e logout do Módulo 1, para o
+  navegador não depender do CORS da API de identidade.
 - Verificação de acesso a projetos pelo endpoint HTTP do Módulo 1; não há
   acesso ao banco de outro módulo.
 - Chamada autenticada ao `/api/chat` do Módulo 7 e persistência do identificador
   da conversa externa.
 - Registro de repositórios GitHub, stack e recomendações associadas ao projeto.
 - O CLI usa `M1_ACCESS_TOKEN`; as instruções das rotas estão neste README.
-- Validação local: 24 testes passaram e Ruff passou.
+- Validação local após a integração: 30 testes passaram e Ruff passou.
 
 ### Pendente antes de considerar a integração operacional
 
 - O servidor e o banco `curadoria` já foram criados no Azure. A última
   confirmação registrada indicava a migração `0001_create_curadoria_schema`;
   não foi confirmado que `0002` e `0003` tenham sido aplicadas.
-- Publicar a versão atualizada da API no Azure e confirmar que o App Service
-  tem `DATABASE_URL` configurada.
-- O frontend deste projeto não foi alterado nem foi confirmado que encaminha
-  `Authorization: Bearer <access_token>`. As rotas protegidas responderão
-  `401` até o token individual do Módulo 1 ser enviado.
+- Publicar a versão atualizada da API no Azure, incluindo o proxy de
+  autenticação, e confirmar que o App Service tem `DATABASE_URL` configurada.
+- O frontend foi integrado localmente no repositório
+  `Modulo5-CURADORIA-INTELIGENTE-E-TENDENCIAS-TECNOLOGICAS`, mas ainda precisa
+  ser publicado. O login/MFA, Bearer, renovação e histórico só funcionarão em
+  produção depois que API e frontend atualizados estiverem publicados.
 - Fazer um teste integrado real com PostgreSQL no Azure, Módulo 1 e Módulo 7.
   Os testes locais não acessaram esses serviços.
 - Restringir o firewall do PostgreSQL. A regra ampla foi mantida por enquanto
@@ -111,8 +114,8 @@ adicione `DATABASE_URL` nas configurações de ambiente e reinicie o serviço.
 As operações que salvam dados de uma pessoa exigem o token de acesso individual
 do Módulo 1 no cabeçalho `Authorization: Bearer <access_token>`. O backend
 valida RS256, issuer, audience e JWKS e confirma a sessão em `/auth/me`. Ele não
-armazena senha nem aceita token compartilhado. O frontend só precisa encaminhar
-o token obtido no login; sem esse cabeçalho, as rotas protegidas respondem `401`.
+armazena senha nem aceita token compartilhado. O frontend usa o proxy abaixo
+para o login e mantém os tokens apenas em `sessionStorage`.
 
 O backend usa estes serviços por padrão:
 
@@ -126,6 +129,11 @@ Rotas integradas:
 
 | Método e rota | Uso |
 | --- | --- |
+| `POST /auth/login` | Encaminha e-mail e senha como formulário para `/auth/token` do Módulo 1 |
+| `POST /auth/mfa/verify` | Encaminha o desafio e um código MFA ou de recuperação |
+| `POST /auth/refresh` | Renova o token por meio do Módulo 1 |
+| `POST /auth/logout` | Encerra a sessão no Módulo 1 |
+| `GET /auth/session` | Confirma a sessão ativa e retorna o perfil básico autenticado |
 | `POST /consultas` | Busca artigos e salva pergunta/resposta no histórico da pessoa |
 | `POST /assistente` | Envia a pergunta ao `POST /api/chat` do Módulo 7 e salva a conversa |
 | `GET /conversas` e `GET /conversas/{chat_id}` | Lista e consulta apenas o histórico da pessoa autenticada |
@@ -167,8 +175,10 @@ Ordem sugerida para continuar:
 2. Rode `python -m alembic current`; o esperado é
    `0003_integrate_user_workflows (head)`.
 3. Publique a API e configure `DATABASE_URL` no App Service.
-4. Atualize/confirme o frontend para encaminhar o Bearer JWT nas rotas
-   protegidas e teste `/consultas` e `/assistente`.
-5. Restrinja o firewall do PostgreSQL aos IPs necessários.
+4. Publique o frontend com `VITE_API_URL` apontando para a raiz da API
+   (por exemplo, `https://<host-da-api>`).
+5. Teste login/MFA, `/auth/session`, consulta, histórico e integração GitHub
+   com uma conta individual e um projeto ao qual ela tenha acesso.
+6. Restrinja o firewall do PostgreSQL aos IPs necessários.
 
 Não compartilhe tokens ou senhas no chat nem os salve no repositório.

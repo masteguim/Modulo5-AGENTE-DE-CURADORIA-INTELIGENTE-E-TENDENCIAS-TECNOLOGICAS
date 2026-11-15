@@ -8,11 +8,15 @@ from uuid import UUID
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.alertas import gerar_alertas
-from app.auth import AuthenticatedUser, get_current_user
+from app.auth import (
+    AuthenticatedUser,
+    encaminhar_autenticacao_m1,
+    get_current_user,
+)
 from app.curadoria import (
     buscar_conteudos,
     extrair_termos,
@@ -171,6 +175,21 @@ class AssistenteEntrada(BaseModel):
 
 class RepositorioEntrada(BaseModel):
     repositorio: str = Field(min_length=3, max_length=200)
+
+
+class LoginEntrada(BaseModel):
+    username: str = Field(min_length=1, max_length=320)
+    password: SecretStr
+
+
+class VerificacaoMfaEntrada(BaseModel):
+    challenge_token: SecretStr
+    code: SecretStr | None = None
+    recovery_code: SecretStr | None = None
+
+
+class RefreshEntrada(BaseModel):
+    refresh_token: SecretStr
 
 
 class Artigo(BaseModel):
@@ -500,6 +519,102 @@ def inicio():
         "versao": "3.4.0",
         "status": "online",
         "artigos_armazenados": contar_artigos(),
+    }
+
+
+@app.post("/auth/login")
+def login_modulo1(dados: LoginEntrada):
+    senha = dados.password.get_secret_value()
+    if len(senha) > 128:
+        raise HTTPException(
+            status_code=400,
+            detail="A senha excede o limite aceito pelo serviço de identidade.",
+        )
+    return encaminhar_autenticacao_m1(
+        "POST",
+        "/auth/token",
+        dados_formulario={
+            "username": dados.username,
+            "password": dados.password.get_secret_value(),
+        },
+    )
+
+
+@app.post("/auth/mfa/verify")
+def verificar_mfa_modulo1(dados: VerificacaoMfaEntrada):
+    codigo = dados.code.get_secret_value() if dados.code else None
+    codigo_recuperacao = (
+        dados.recovery_code.get_secret_value()
+        if dados.recovery_code
+        else None
+    )
+    if bool(codigo) == bool(codigo_recuperacao):
+        raise HTTPException(
+            status_code=422,
+            detail="Informe o código MFA ou um código de recuperação.",
+        )
+    if (
+        not dados.challenge_token.get_secret_value()
+        or (codigo and len(codigo) > 6)
+        or (codigo_recuperacao and len(codigo_recuperacao) > 128)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="O desafio ou código MFA está fora do limite aceito.",
+        )
+
+    return encaminhar_autenticacao_m1(
+        "POST",
+        "/auth/mfa/verify",
+        dados_json={
+            "challenge_token": dados.challenge_token.get_secret_value(),
+            **(
+                {"code": codigo}
+                if codigo
+                else {"recovery_code": codigo_recuperacao}
+            ),
+        },
+    )
+
+
+@app.post("/auth/refresh")
+def atualizar_token_modulo1(dados: RefreshEntrada):
+    refresh_token = dados.refresh_token.get_secret_value()
+    if not refresh_token or len(refresh_token) > 512:
+        raise HTTPException(
+            status_code=422,
+            detail="O refresh token está fora do limite aceito.",
+        )
+    return encaminhar_autenticacao_m1(
+        "POST",
+        "/auth/refresh",
+        dados_json={
+            "refresh_token": refresh_token,
+        },
+    )
+
+
+@app.post("/auth/logout")
+def logout_modulo1(
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    return encaminhar_autenticacao_m1(
+        "POST",
+        "/auth/logout",
+        dados_json={},
+        access_token=usuario.access_token,
+    )
+
+
+@app.get("/auth/session")
+def sessao_atual(
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    return {
+        "id": usuario.profile["id"],
+        "email": usuario.profile["email"],
+        "display_name": usuario.profile["display_name"],
+        "is_active": usuario.profile["is_active"],
     }
 
 

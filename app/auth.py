@@ -5,7 +5,8 @@ from typing import Annotated, Any
 
 import httpx
 import jwt
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Response
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import (
     PyJWKClient,
@@ -31,6 +32,7 @@ _bearer = HTTPBearer(auto_error=False)
 class AuthenticatedUser:
     subject: str
     access_token: str = field(repr=False)
+    profile: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 @lru_cache(maxsize=1)
@@ -113,7 +115,79 @@ def get_current_user(
             detail="Não foi possível confirmar a sessão no Módulo 1.",
         )
 
+    try:
+        profile = response.json()
+    except ValueError as erro:
+        raise HTTPException(
+            status_code=503,
+            detail="O Módulo 1 retornou um perfil inválido.",
+        ) from erro
+
+    if not isinstance(profile, dict) or any(
+        not isinstance(profile.get(campo), tipo)
+        for campo, tipo in (
+            ("id", str),
+            ("email", str),
+            ("display_name", str),
+            ("is_active", bool),
+        )
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="O Módulo 1 retornou um perfil fora do contrato.",
+        )
+
     return AuthenticatedUser(
         subject=claims["sub"],
         access_token=credentials.credentials,
+        profile=profile,
+    )
+
+
+def encaminhar_autenticacao_m1(
+    metodo: str,
+    caminho: str,
+    *,
+    dados_formulario: dict[str, str] | None = None,
+    dados_json: dict[str, str] | None = None,
+    access_token: str | None = None,
+) -> Response:
+    cabecalhos = {}
+    if access_token:
+        cabecalhos["Authorization"] = f"Bearer {access_token}"
+
+    try:
+        resposta = httpx.request(
+            metodo,
+            f"{M1_BASE_URL}{caminho}",
+            data=dados_formulario,
+            json=dados_json,
+            headers=cabecalhos,
+            timeout=15,
+        )
+    except httpx.TimeoutException as erro:
+        raise HTTPException(
+            status_code=504,
+            detail="O serviço de identidade excedeu o tempo limite.",
+        ) from erro
+    except httpx.RequestError as erro:
+        raise HTTPException(
+            status_code=503,
+            detail="O serviço de identidade está indisponível.",
+        ) from erro
+
+    if resposta.status_code == 204:
+        return Response(status_code=204)
+
+    try:
+        conteudo = resposta.json()
+    except ValueError as erro:
+        raise HTTPException(
+            status_code=502,
+            detail="O serviço de identidade retornou uma resposta inválida.",
+        ) from erro
+
+    return JSONResponse(
+        status_code=resposta.status_code,
+        content=conteudo,
     )

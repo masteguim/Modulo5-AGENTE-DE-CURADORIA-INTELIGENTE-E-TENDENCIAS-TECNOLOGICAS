@@ -29,7 +29,15 @@ def test_valid_token_requires_active_module1_session(monkeypatch):
 
     def obter_sessao(url, headers, timeout):
         chamadas.update(url=url, headers=headers, timeout=timeout)
-        return SimpleNamespace(status_code=200)
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {
+                "id": "id-42",
+                "email": "usuario@example.com",
+                "display_name": "Usuário",
+                "is_active": True,
+            },
+        )
 
     monkeypatch.setattr(auth.httpx, "get", obter_sessao)
 
@@ -44,6 +52,36 @@ def test_valid_token_requires_active_module1_session(monkeypatch):
     assert chamadas["headers"]["Authorization"] == (
         "Bearer token-privado-de-teste"
     )
+    assert usuario.profile["email"] == "usuario@example.com"
+
+
+def test_proxy_de_login_repassa_formulario_sem_expor_segredo(monkeypatch):
+    from fastapi.responses import JSONResponse
+
+    chamadas = {}
+
+    def requisitar(metodo, url, **kwargs):
+        chamadas.update(metodo=metodo, url=url, **kwargs)
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"access_token": "token-resposta"},
+        )
+
+    monkeypatch.setattr(auth.httpx, "request", requisitar)
+    resposta = auth.encaminhar_autenticacao_m1(
+        "POST",
+        "/auth/token",
+        dados_formulario={
+            "username": "usuario@example.com",
+            "password": "senha-secreta",
+        },
+    )
+
+    assert isinstance(resposta, JSONResponse)
+    assert resposta.status_code == 200
+    assert chamadas["data"]["password"] == "senha-secreta"
+    assert chamadas["json"] is None
+    assert "senha-secreta" not in repr(resposta.body)
 
 
 def test_access_token_requires_rs256_issuer_and_audience(monkeypatch):
