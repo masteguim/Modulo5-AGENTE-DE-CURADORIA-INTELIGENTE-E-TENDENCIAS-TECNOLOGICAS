@@ -2,9 +2,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.recomendacoes import (
-    selecionar_recomendacoes,
-)
+from app.recomendacoes import selecionar_recomendacoes
 
 client = TestClient(app)
 
@@ -27,11 +25,18 @@ def criar_resultado(artigos=None):
     }
 
 
-def test_inicio():
+def test_inicio(monkeypatch):
+    monkeypatch.setattr(
+        "app.main.contar_artigos",
+        lambda: 0,
+    )
+
     resposta = client.get("/")
 
     assert resposta.status_code == 200
-    assert resposta.json()["versao"] == "2.4.0"
+    assert resposta.json()["versao"] == "3.4.0"
+    assert resposta.json()["status"] == "online"
+    assert resposta.json()["artigos_armazenados"] == 0
 
 
 def test_consultar(monkeypatch):
@@ -66,6 +71,7 @@ def test_pergunta_vazia():
 
 def test_consulta_fontes_indisponiveis(monkeypatch):
     def buscar_fake(pergunta):
+        assert pergunta == "React"
         return {
             **criar_resultado(),
             "fontes_indisponiveis": [
@@ -100,50 +106,40 @@ def test_feed_geral(monkeypatch):
         for numero in range(1, 11)
     ]
 
-    def obter_fake(categoria=None, repositorio=None):
-        assert categoria is None
-        assert repositorio is None
-
-        return {
-            **criar_resultado(artigos),
-            "total": 10,
-            "categoria": "geral",
-            "repositorio": None,
-            "stack_detectada": [],
-        }
+    def listar_fake(limite):
+        assert limite == 500
+        return artigos
 
     monkeypatch.setattr(
-        "app.main.obter_recomendacoes",
-        obter_fake,
+        "app.main.listar_artigos",
+        listar_fake,
     )
 
     resposta = client.get("/feed")
 
     assert resposta.status_code == 200
-    assert resposta.json()["total"] == 10
+
+    dados = resposta.json()
+
+    assert dados["total"] == 10
+    assert len(dados["artigos"]) == 10
+    assert dados["categoria"] == "geral"
+    assert dados["repositorio"] is None
 
 
 def test_feed_categoria(monkeypatch):
     artigos = [
         criar_artigo(numero)
-        for numero in range(1, 6)
+        for numero in range(1, 11)
     ]
 
-    def obter_fake(categoria=None, repositorio=None):
-        assert categoria == "desenvolvimento"
-        assert repositorio is None
-
-        return {
-            **criar_resultado(artigos),
-            "total": 5,
-            "categoria": categoria,
-            "repositorio": None,
-            "stack_detectada": [],
-        }
+    def listar_fake(limite):
+        assert limite == 500
+        return artigos
 
     monkeypatch.setattr(
-        "app.main.obter_recomendacoes",
-        obter_fake,
+        "app.main.listar_artigos",
+        listar_fake,
     )
 
     resposta = client.get(
@@ -151,7 +147,12 @@ def test_feed_categoria(monkeypatch):
     )
 
     assert resposta.status_code == 200
-    assert resposta.json()["total"] == 5
+
+    dados = resposta.json()
+
+    assert dados["total"] == 5
+    assert len(dados["artigos"]) == 5
+    assert dados["categoria"] == "desenvolvimento"
 
 
 def test_categoria_invalida():
@@ -159,7 +160,10 @@ def test_categoria_invalida():
         "/feed?categoria=desconhecida"
     )
 
-    assert resposta.status_code == 422
+    assert resposta.status_code == 400
+    assert resposta.json()["detail"] == (
+        "Categoria inválida."
+    )
 
 
 def test_detectar_stack(monkeypatch):
@@ -176,7 +180,7 @@ def test_detectar_stack(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "app.main.analisar_repositorio",
+        "app.main.detectar_stack",
         detectar_fake,
     )
 
@@ -185,7 +189,11 @@ def test_detectar_stack(monkeypatch):
     )
 
     assert resposta.status_code == 200
-    assert resposta.json()["stack_detectada"] == [
+
+    dados = resposta.json()
+
+    assert dados["repositorio"] == "usuario/projeto"
+    assert dados["stack_detectada"] == [
         "React",
         "Docker",
     ]

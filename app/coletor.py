@@ -1,12 +1,12 @@
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.curadoria import coletar_fontes
 from app.database import (
+    contar_artigos,
     inicializar_banco,
     salvar_artigos,
-    contar_artigos,
 )
 
 logging.basicConfig(
@@ -23,7 +23,7 @@ TERMO_ARXIV = "software engineering"
 def executar_coleta():
     logger.info("Iniciando coleta de artigos...")
 
-    inicio = datetime.now(timezone.utc)
+    inicio = datetime.now(UTC)
 
     try:
         resultado = coletar_fontes(TERMO_ARXIV)
@@ -50,7 +50,7 @@ def executar_coleta():
             "status": "sucesso",
             "inicio": inicio.isoformat(),
             "fim": datetime.now(
-                timezone.utc
+                UTC
             ).isoformat(),
             "fontes_consultadas": fontes,
             "fontes_indisponiveis": indisponiveis,

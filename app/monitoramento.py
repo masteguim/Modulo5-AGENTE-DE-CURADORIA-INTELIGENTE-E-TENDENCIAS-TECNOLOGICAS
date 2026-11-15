@@ -8,7 +8,6 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-
 logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
@@ -310,7 +309,7 @@ def monitorar_repositorio(repositorio, limite=5):
         )
 
         if not isinstance(commits_recentes, list):
-            raise RuntimeError(
+            raise TypeError(
                 "Resposta inesperada da API do GitHub."
             )
 

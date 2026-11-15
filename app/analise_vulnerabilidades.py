@@ -1,8 +1,10 @@
 import json
 import sys
+
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
-from packaging.version import InvalidVersion, Version
 from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
+
 from app.avisos_github import (
     buscar_avisos_ecossistema,
     formatar_aviso,
@@ -173,7 +175,7 @@ def analisar_repositorio(repositorio):
                 limite=100,
             )
 
-        except Exception as erro:
+        except Exception as erro:  # noqa: BLE001
             erros.append({
                 "ecossistema": ecossistema,
                 "erro": str(erro),

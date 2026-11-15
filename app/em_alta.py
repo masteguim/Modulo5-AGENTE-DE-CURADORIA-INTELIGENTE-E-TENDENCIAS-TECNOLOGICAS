@@ -3,11 +3,10 @@ import json
 import math
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from app.database import inicializar_banco, listar_artigos
 from app.curadoria import normalizar
-
+from app.database import inicializar_banco, listar_artigos
 
 CATEGORIAS = {
     "Inteligência Artificial": [
@@ -101,13 +100,13 @@ def converter_data(valor):
 
     try:
         data = datetime.fromisoformat(
-            str(valor).replace("Z", "+00:00")
+            str(valor)
         )
 
         if data.tzinfo is None:
-            data = data.replace(tzinfo=timezone.utc)
+            data = data.replace(tzinfo=UTC)
 
-        return data.astimezone(timezone.utc)
+        return data.astimezone(UTC)
 
     except (ValueError, TypeError):
         return None
@@ -181,7 +180,7 @@ def gerar_em_alta(limite=20, categoria=None):
 
     artigos = listar_artigos(500)
 
-    agora = datetime.now(timezone.utc)
+    agora = datetime.now(UTC)
 
     classificados = []
 

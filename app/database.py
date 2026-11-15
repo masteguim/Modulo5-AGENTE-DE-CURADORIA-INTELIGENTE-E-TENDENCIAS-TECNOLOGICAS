@@ -1,7 +1,7 @@
 import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 CAMINHO_BANCO = Path(
@@ -69,7 +69,7 @@ def salvar_artigo(artigo):
         return False
 
     data_coleta = datetime.now(
-        timezone.utc
+        UTC
     ).isoformat()
 
     with conectar() as conexao:

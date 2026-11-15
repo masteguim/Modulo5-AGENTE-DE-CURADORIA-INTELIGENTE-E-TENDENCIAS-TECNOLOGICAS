@@ -8,7 +8,6 @@ from fastapi.concurrency import run_in_threadpool
 from app.analise_vulnerabilidades import analisar_repositorio
 from app.dependencias import normalizar_repositorio
 
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -57,10 +56,7 @@ async def consultar_vulnerabilidades(
         ) from erro
 
     except (httpx.RequestError, RuntimeError) as erro:
-        logger.exception(
-            "Erro na análise de vulnerabilidades: %s",
-            erro,
-        )
+        logger.exception("Erro na análise de vulnerabilidades")
 
         raise HTTPException(
             status_code=502,

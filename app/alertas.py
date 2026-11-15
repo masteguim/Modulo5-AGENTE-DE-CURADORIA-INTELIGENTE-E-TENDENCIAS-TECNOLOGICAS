@@ -1,9 +1,8 @@
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from app.database import listar_artigos
 from app.curadoria import normalizar
-
+from app.database import listar_artigos
 
 PALAVRAS_CHAVE = {
     "critico": [
@@ -138,7 +137,7 @@ def criar_alerta(artigo, stack=None):
             "data_publicacao"
         ),
         "identificado_em": datetime.now(
-            timezone.utc
+            UTC
         ).isoformat(),
         "tipo": "possivel_alerta_seguranca",
     }

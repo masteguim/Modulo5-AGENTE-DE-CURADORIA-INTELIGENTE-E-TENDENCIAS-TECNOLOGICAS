@@ -5,7 +5,6 @@ import os
 
 import httpx
 
-
 logger = logging.getLogger(__name__)
 
 URL_ADVISORIES = "https://api.github.com/advisories"

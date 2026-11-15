@@ -1,10 +1,12 @@
 import logging
 import re
 from contextlib import asynccontextmanager
+
 import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
 from app.alertas import gerar_alertas
 from app.curadoria import (
     buscar_conteudos,

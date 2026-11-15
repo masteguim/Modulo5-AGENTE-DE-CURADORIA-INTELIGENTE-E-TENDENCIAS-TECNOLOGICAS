@@ -8,7 +8,6 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-
 GITHUB_API = "https://api.github.com"
 
 ARQUIVOS_SUPORTADOS = [
