@@ -1,13 +1,18 @@
+import json
 import logging
 import re
 from contextlib import asynccontextmanager
+from typing import Annotated, Any, Literal
+from uuid import UUID
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.alertas import gerar_alertas
+from app.auth import AuthenticatedUser, get_current_user
 from app.curadoria import (
     buscar_conteudos,
     extrair_termos,
@@ -19,9 +24,21 @@ from app.database import (
     contar_artigos,
     inicializar_banco,
     listar_artigos,
+    listar_conversas,
+    listar_recomendacoes_projeto,
+    listar_repositorios_projeto,
+    obter_contexto_conversa,
+    obter_conversa,
+    registrar_consulta,
+    registrar_resposta_assistente,
+    salvar_repositorio_projeto,
 )
 from app.em_alta import gerar_em_alta
 from app.github_stack import detectar_stack
+from app.integracoes import (
+    perguntar_ao_modulo7,
+    verificar_acesso_projeto,
+)
 from app.monitoramento import monitorar_repositorio
 from app.vulnerabilidades_router import router as vulnerabilidades_router
 
@@ -136,6 +153,24 @@ TERMOS_STACK = {
 
 class ConsultaEntrada(BaseModel):
     pergunta: str = Field(min_length=1)
+    project_id: UUID | None = None
+    chat_id: int | None = Field(default=None, gt=0)
+
+
+class AssistenteEntrada(BaseModel):
+    pergunta: str = Field(min_length=1, max_length=20000)
+    project_id: UUID | None = None
+    chat_id: int | None = Field(default=None, gt=0)
+    perfil: Literal[
+        "Desenvolvedor",
+        "Product Owner",
+        "Gerente de Projetos",
+    ] = "Desenvolvedor"
+    temperatura: float = Field(default=0.4, ge=0, le=1)
+
+
+class RepositorioEntrada(BaseModel):
+    repositorio: str = Field(min_length=3, max_length=200)
 
 
 class Artigo(BaseModel):
@@ -149,6 +184,7 @@ class Artigo(BaseModel):
 class ConsultaResposta(BaseModel):
     pergunta: str
     artigos: list[Artigo]
+    chat_id: int
 
 
 class FeedResposta(BaseModel):
@@ -240,6 +276,32 @@ def corresponde_termo(conteudo, termo):
     )
 
     return bool(re.search(padrao, conteudo))
+
+
+def obter_contexto_autorizado(
+    usuario: AuthenticatedUser,
+    chat_id: int,
+) -> dict[str, Any]:
+    try:
+        contexto = obter_contexto_conversa(
+            usuario.subject,
+            chat_id,
+        )
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao carregar o contexto da conversa.")
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível carregar a conversa do banco.",
+        ) from erro
+
+    if contexto is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversa não encontrada.",
+        )
+    if contexto["project_id"]:
+        verificar_acesso_projeto(usuario, contexto["project_id"])
+    return contexto
 
 
 def pontuar_recomendacao(
@@ -628,7 +690,25 @@ def listar_em_alta(
     "/consultas",
     response_model=ConsultaResposta,
 )
-def consultar(dados: ConsultaEntrada):
+def consultar(
+    dados: ConsultaEntrada,
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    project_id = dados.project_id
+    if dados.chat_id is not None:
+        contexto = obter_contexto_autorizado(
+            usuario,
+            dados.chat_id,
+        )
+        if project_id and project_id != contexto["project_id"]:
+            raise HTTPException(
+                status_code=400,
+                detail="A conversa não pertence ao projeto informado.",
+            )
+        project_id = contexto["project_id"]
+    elif project_id:
+        verificar_acesso_projeto(usuario, project_id)
+
     resultado = buscar_conteudos(
         dados.pergunta
     )
@@ -653,7 +733,264 @@ def consultar(dados: ConsultaEntrada):
             ),
         )
 
+    try:
+        chat_id = registrar_consulta(
+            subject=usuario.subject,
+            pergunta=dados.pergunta,
+            resposta=json.dumps(
+                resultado["artigos"],
+                ensure_ascii=False,
+            ),
+            project_id=project_id,
+            chat_id=dados.chat_id,
+        )
+    except LookupError as erro:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversa não encontrada.",
+        ) from erro
+    except ValueError as erro:
+        raise HTTPException(
+            status_code=400,
+            detail=str(erro),
+        ) from erro
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao persistir a consulta.")
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível salvar a consulta no banco.",
+        ) from erro
+
     return {
         "pergunta": dados.pergunta,
         "artigos": resultado["artigos"],
+        "chat_id": chat_id,
+    }
+
+
+@app.post("/assistente")
+def consultar_assistente(
+    dados: AssistenteEntrada,
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    project_id = dados.project_id
+    m7_conversation_id = None
+
+    if dados.chat_id is not None:
+        contexto = obter_contexto_autorizado(
+            usuario,
+            dados.chat_id,
+        )
+        if project_id and project_id != contexto["project_id"]:
+            raise HTTPException(
+                status_code=400,
+                detail="A conversa não pertence ao projeto informado.",
+            )
+        project_id = contexto["project_id"]
+        m7_conversation_id = contexto["m7_conversation_id"]
+
+    if project_id:
+        verificar_acesso_projeto(usuario, project_id)
+
+    resposta = perguntar_ao_modulo7(
+        usuario=usuario,
+        pergunta=dados.pergunta,
+        project_id=project_id,
+        conversation_id=m7_conversation_id,
+        profile=dados.perfil,
+        temperature=dados.temperatura,
+    )
+
+    try:
+        chat_id = registrar_resposta_assistente(
+            subject=usuario.subject,
+            pergunta=dados.pergunta,
+            resposta=json.dumps(
+                resposta["message"],
+                ensure_ascii=False,
+            ),
+            m7_conversation_id=resposta["conversation_id"],
+            project_id=project_id,
+            chat_id=dados.chat_id,
+        )
+    except (LookupError, ValueError) as erro:
+        raise HTTPException(
+            status_code=404 if isinstance(erro, LookupError) else 400,
+            detail=str(erro),
+        ) from erro
+    except SQLAlchemyError as erro:
+        logger.exception(
+            "Falha ao persistir a resposta do Módulo 7."
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "O Módulo 7 respondeu, mas não foi possível "
+                "salvar a conversa no banco."
+            ),
+        ) from erro
+
+    return {
+        "chat_id": chat_id,
+        "project_id": str(project_id) if project_id else None,
+        "conversation_id": resposta["conversation_id"],
+        "message": resposta["message"],
+    }
+
+
+@app.get("/conversas")
+def consultar_conversas(
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    project_id: UUID | None = None,
+    limite: int = Query(default=50, ge=1, le=100),
+):
+    if project_id:
+        verificar_acesso_projeto(usuario, project_id)
+    try:
+        conversas = listar_conversas(
+            usuario.subject,
+            project_id,
+            limite,
+        )
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao listar conversas.")
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível consultar o histórico no banco.",
+        ) from erro
+    return {"conversas": conversas}
+
+
+@app.get("/conversas/{chat_id}")
+def consultar_conversa(
+    chat_id: int,
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    try:
+        conversa = obter_conversa(usuario.subject, chat_id)
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao carregar conversa.")
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível consultar a conversa no banco.",
+        ) from erro
+    if conversa is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversa não encontrada.",
+        )
+    if conversa["project_id"]:
+        verificar_acesso_projeto(
+            usuario,
+            UUID(conversa["project_id"]),
+        )
+    return conversa
+
+
+@app.post("/projetos/{project_id}/repositorios")
+def registrar_repositorio(
+    project_id: UUID,
+    dados: RepositorioEntrada,
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    verificar_acesso_projeto(usuario, project_id)
+    try:
+        resultado = gerar_feed("geral", dados.repositorio)
+        stack = resultado["stack_detectada"]
+        artigos = resultado["artigos"]
+        recomendacoes_por_tecnologia = {}
+
+        for tecnologia in stack:
+            termos = termos_repositorio([tecnologia])
+            recomendacoes_por_tecnologia[tecnologia] = [
+                artigo
+                for artigo in artigos
+                if any(
+                    corresponde_termo(
+                        normalizar(
+                            (artigo.get("titulo") or "")
+                            + " "
+                            + (artigo.get("resumo") or "")
+                        ),
+                        termo,
+                    )
+                    for termo in termos
+                )
+            ]
+
+        persistencia = salvar_repositorio_projeto(
+            subject=usuario.subject,
+            project_id=project_id,
+            repositorio_url=(
+                f"https://github.com/{resultado['repositorio']}"
+            ),
+            stack=stack,
+            recomendacoes=recomendacoes_por_tecnologia,
+        )
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao persistir a integração GitHub.")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Não foi possível carregar ou salvar os dados "
+                "do repositório no banco."
+            ),
+        ) from erro
+
+    return {
+        "project_id": str(project_id),
+        "repositorio": resultado["repositorio"],
+        "stack_detectada": stack,
+        "recomendacoes": [
+            {
+                "tecnologia": tecnologia,
+                "artigos": recomendacoes_por_tecnologia[tecnologia],
+            }
+            for tecnologia in stack
+        ],
+        "persistencia": persistencia,
+    }
+
+
+@app.get("/projetos/{project_id}/repositorios")
+def consultar_repositorios_projeto(
+    project_id: UUID,
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    verificar_acesso_projeto(usuario, project_id)
+    try:
+        repositorios = listar_repositorios_projeto(
+            project_id,
+        )
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao listar repositórios do projeto.")
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível consultar os repositórios no banco.",
+        ) from erro
+    return {
+        "project_id": str(project_id),
+        "repositorios": repositorios,
+    }
+
+
+@app.get("/projetos/{project_id}/recomendacoes")
+def consultar_recomendacoes_projeto(
+    project_id: UUID,
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    verificar_acesso_projeto(usuario, project_id)
+    try:
+        recomendacoes = listar_recomendacoes_projeto(
+            project_id,
+        )
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao listar recomendações do projeto.")
+        raise HTTPException(
+            status_code=503,
+            detail="Não foi possível consultar recomendações no banco.",
+        ) from erro
+    return {
+        "project_id": str(project_id),
+        "recomendacoes": recomendacoes,
     }

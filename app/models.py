@@ -56,6 +56,9 @@ class Chat(Base):
     )
     titulo: Mapped[str] = mapped_column(String(255), nullable=False)
     project_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    m7_conversation_id: Mapped[str | None] = mapped_column(
+        String(255)
+    )
     criado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -76,6 +79,10 @@ class Chat(Base):
     __table_args__ = (
         Index("ix_chats_usuario_id", "usuario_id"),
         Index("ix_chats_project_id", "project_id"),
+        UniqueConstraint(
+            "m7_conversation_id",
+            name="uq_chats_m7_conversation_id",
+        ),
     )
 
 
@@ -109,6 +116,7 @@ class IntegracaoGitHub(Base):
     )
     repositorio_id_externo: Mapped[int | None] = mapped_column(BigInteger)
     repositorio_url: Mapped[str | None] = mapped_column(String(2048))
+    project_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     criado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -122,6 +130,12 @@ class IntegracaoGitHub(Base):
     __table_args__ = (
         Index("ix_integracoes_github_usuario_id", "usuario_id"),
         Index("ix_integracoes_github_chat_id", "chat_id"),
+        Index("ix_integracoes_github_project_id", "project_id"),
+        UniqueConstraint(
+            "project_id",
+            "repositorio_url",
+            name="uq_integracoes_github_project_url",
+        ),
     )
 
 

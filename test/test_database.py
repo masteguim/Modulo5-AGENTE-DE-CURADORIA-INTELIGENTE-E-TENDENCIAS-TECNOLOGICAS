@@ -28,3 +28,11 @@ def test_schema_has_expected_entities_and_external_references():
     assert {foreign_key["referred_table"] for foreign_key in chat_foreign_keys} == {
         "usuarios"
     }
+    chat_columns = {column["name"] for column in inspector.get_columns("chats")}
+    assert "m7_conversation_id" in chat_columns
+
+    github_columns = {
+        column["name"]
+        for column in inspector.get_columns("integracoes_github")
+    }
+    assert "project_id" in github_columns
