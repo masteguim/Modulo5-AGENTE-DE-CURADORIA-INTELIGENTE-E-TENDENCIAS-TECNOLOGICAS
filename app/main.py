@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.alertas import gerar_alertas
+from app.cliente_ia import router as ia_router
 from app.curadoria import (
     buscar_conteudos,
     extrair_termos,
@@ -56,6 +57,7 @@ app.add_middleware(
 )
 
 app.include_router(vulnerabilidades_router)
+app.include_router(ia_router)
 
 CATEGORIAS = {
     "inteligencia-artificial": {
