@@ -34,8 +34,9 @@ usuário não são armazenadas.
 ### Estado atual
 
 O servidor e o banco `curadoria` já foram criados no Azure. A migração
-`0001_create_curadoria_schema` foi aplicada; o comando de verificação retornou
-`0001_create_curadoria_schema (head)`.
+`0001_create_curadoria_schema` foi aplicada. A migração `0002_create_artigos_table`
+adiciona a tabela de artigos exigida pelo feed e deve ser aplicada no Azure após
+atualizar o código.
 
 ### Conferir a migração
 

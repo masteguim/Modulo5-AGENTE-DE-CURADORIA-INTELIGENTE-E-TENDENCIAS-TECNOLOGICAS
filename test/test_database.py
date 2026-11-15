@@ -11,6 +11,7 @@ def test_schema_has_expected_entities_and_external_references():
 
     inspector = inspect(engine)
     assert set(inspector.get_table_names()) == {
+        "artigos",
         "usuarios",
         "chats",
         "conteudos",

@@ -168,3 +168,23 @@ class Recomendacao(Base):
     tecnologia: Mapped[Tecnologia] = relationship(back_populates="recomendacoes")
 
     __table_args__ = (Index("ix_recomendacoes_tecnologia_id", "tecnologia_id"),)
+
+
+class Artigo(Base):
+    __tablename__ = "artigos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    titulo: Mapped[str] = mapped_column(String(1000), nullable=False)
+    link: Mapped[str] = mapped_column(String(2048), nullable=False)
+    fonte: Mapped[str] = mapped_column(String(255), nullable=False)
+    idioma: Mapped[str] = mapped_column(String(45), nullable=False, default="en")
+    resumo: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    data_publicacao: Mapped[str | None] = mapped_column(String(100))
+    coletado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("link", name="uq_artigos_link"),
+        Index("idx_artigos_publicacao", "data_publicacao"),
+    )
