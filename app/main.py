@@ -13,12 +13,12 @@ from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.alertas import gerar_alertas
-from app.cliente_ia import router as ia_router
 from app.auth import (
     AuthenticatedUser,
     encaminhar_autenticacao_m1,
     get_current_user,
 )
+from app.cliente_ia import router as ia_router
 from app.curadoria import (
     buscar_conteudos,
     extrair_termos,
