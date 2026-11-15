@@ -9,6 +9,11 @@ __pycache__/
 # C extensions
 *.so
 
+# Banco de dados SQLite
+*.db
+*.db-shm
+*.db-wal
+
 # Distribution / packaging
 .Python
 build/
