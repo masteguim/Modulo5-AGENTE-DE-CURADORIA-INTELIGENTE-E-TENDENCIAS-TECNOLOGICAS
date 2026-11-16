@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
+from dotenv import load_dotenv
 from sqlalchemy import String, cast, create_engine, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Engine, make_url
@@ -19,6 +20,8 @@ from app.models import (
     Tecnologia,
     Usuario,
 )
+
+load_dotenv()
 
 _engine: Engine | None = None
 _session_factory: sessionmaker[Session] | None = None

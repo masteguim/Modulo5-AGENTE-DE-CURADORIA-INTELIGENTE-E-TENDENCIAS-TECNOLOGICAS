@@ -4,7 +4,6 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
-    BigInteger,
     DateTime,
     ForeignKey,
     Index,
@@ -26,8 +25,6 @@ class Usuario(Base):
 
     id_usuario: Mapped[int] = mapped_column(primary_key=True)
     identificador_externo: Mapped[str] = mapped_column(String(255), nullable=False)
-    nome: Mapped[str | None] = mapped_column(String(255))
-    email: Mapped[str | None] = mapped_column(String(320))
     criado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -114,7 +111,6 @@ class IntegracaoGitHub(Base):
     chat_id: Mapped[int] = mapped_column(
         ForeignKey("chats.id_chat", ondelete="CASCADE"), nullable=False
     )
-    repositorio_id_externo: Mapped[int | None] = mapped_column(BigInteger)
     repositorio_url: Mapped[str | None] = mapped_column(String(2048))
     project_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     criado_em: Mapped[datetime] = mapped_column(
@@ -148,8 +144,6 @@ class Tecnologia(Base):
         nullable=False,
     )
     nome: Mapped[str] = mapped_column(String(255), nullable=False)
-    tipo: Mapped[str | None] = mapped_column(String(100))
-
     integracao_github: Mapped[IntegracaoGitHub] = relationship(
         back_populates="tecnologias"
     )
@@ -198,7 +192,4 @@ class Artigo(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
-    __table_args__ = (
-        UniqueConstraint("link", name="uq_artigos_link"),
-        Index("idx_artigos_publicacao", "data_publicacao"),
-    )
+    __table_args__ = (UniqueConstraint("link", name="uq_artigos_link"),)
