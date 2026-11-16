@@ -1,17 +1,30 @@
+
+import base64
 import json
+import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from threading import Lock
 
 from fastapi import HTTPException
 
 GITHUB_API = "https://api.github.com"
 MAX_ARQUIVOS = 10000
+CACHE_TTL = 600
+
+_cache = {}
+_cache_lock = Lock()
 
 TECNOLOGIAS = {
     "Python": {
-        "arquivos": {"requirements.txt", "pyproject.toml", "pipfile"},
+        "arquivos": {
+            "requirements.txt",
+            "pyproject.toml",
+            "pipfile",
+        },
         "extensoes": {".py"},
     },
     "JavaScript": {
@@ -23,7 +36,12 @@ TECNOLOGIAS = {
         "extensoes": {".ts", ".tsx"},
     },
     "Docker": {
-        "arquivos": {"dockerfile", "docker-compose.yml", "compose.yml", "compose.yaml"},
+        "arquivos": {
+            "dockerfile",
+            "docker-compose.yml",
+            "compose.yml",
+            "compose.yaml",
+        },
         "extensoes": set(),
     },
     "GitHub Actions": {
@@ -54,14 +72,40 @@ DEPENDENCIAS = {
 }
 
 
+def obter_cache(chave):
+    with _cache_lock:
+        entrada = _cache.get(chave)
+
+        if entrada is None:
+            return None
+
+        expiracao, valor = entrada
+
+        if time.monotonic() >= expiracao:
+            del _cache[chave]
+            return None
+
+        return valor
+
+
+def salvar_cache(chave, valor):
+    with _cache_lock:
+        _cache[chave] = (
+            time.monotonic() + CACHE_TTL,
+            valor,
+        )
+
+
 def normalizar_repositorio(repositorio):
     valor = repositorio.strip()
+
     valor = re.sub(
         r"^https?://github\.com/",
         "",
         valor,
         flags=re.IGNORECASE,
     )
+
     valor = valor.rstrip("/")
 
     if not re.fullmatch(
@@ -77,18 +121,34 @@ def normalizar_repositorio(repositorio):
 
 
 def requisitar_github(caminho):
+    if not caminho.startswith("/"):
+        raise ValueError("Caminho inválido da API GitHub.")
+
+    cache = obter_cache(caminho)
+
+    if cache is not None:
+        return cache
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Agente-Curadoria-Mackenzie",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
     requisicao = urllib.request.Request(
         f"{GITHUB_API}{caminho}",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "Agente-Curadoria-Mackenzie",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
+        headers=headers,
     )
 
     try:
         with urllib.request.urlopen(
-            requisicao, timeout=12
+            requisicao,
+            timeout=12,
         ) as resposta:
             conteudo = resposta.read(2_000_001)
 
@@ -98,19 +158,39 @@ def requisitar_github(caminho):
                     detail="Resposta do GitHub muito grande.",
                 )
 
-            return json.loads(conteudo)
+            dados = json.loads(conteudo)
+
+            salvar_cache(caminho, dados)
+
+            return dados
 
     except urllib.error.HTTPError as erro:
         if erro.code == 404:
             raise HTTPException(
                 status_code=404,
-                detail="Repositório não encontrado ou não público.",
+                detail=(
+                    "Repositório não encontrado "
+                    "ou não público."
+                ),
+            ) from erro
+
+        if erro.code == 401:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Token do GitHub inválido "
+                    "ou expirado."
+                ),
             ) from erro
 
         if erro.code in (403, 429):
             raise HTTPException(
                 status_code=503,
-                detail="Limite da API pública do GitHub atingido.",
+                detail=(
+                    "Limite da API pública "
+                    "do GitHub atingido ou "
+                    "acesso temporariamente restrito."
+                ),
             ) from erro
 
         raise HTTPException(
@@ -118,7 +198,10 @@ def requisitar_github(caminho):
             detail="Erro ao consultar GitHub.",
         ) from erro
 
-    except (urllib.error.URLError, TimeoutError) as erro:
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+    ) as erro:
         raise HTTPException(
             status_code=503,
             detail="Não foi possível acessar o GitHub.",
@@ -127,15 +210,20 @@ def requisitar_github(caminho):
 
 def ler_arquivo(repositorio, caminho):
     caminho_codificado = urllib.parse.quote(
-        caminho, safe="/"
+        caminho,
+        safe="/",
     )
 
     try:
         dados = requisitar_github(
-            f"/repos/{repositorio}/contents/{caminho_codificado}"
+            f"/repos/{repositorio}/contents/"
+            f"{caminho_codificado}"
         )
-    except HTTPException:
-        return ""
+
+    except HTTPException as erro:
+        if erro.status_code == 404:
+            return ""
+        raise
 
     if not isinstance(dados, dict):
         return ""
@@ -143,14 +231,19 @@ def ler_arquivo(repositorio, caminho):
     if dados.get("size", 0) > 100_000:
         return ""
 
-    import base64
-
     if dados.get("encoding") == "base64":
         try:
             return base64.b64decode(
                 dados.get("content", "")
-            ).decode("utf-8", errors="replace")
-        except (ValueError, TypeError):
+            ).decode(
+                "utf-8",
+                errors="replace",
+            )
+
+        except (
+            ValueError,
+            TypeError,
+        ):
             return ""
 
     return ""
@@ -164,12 +257,19 @@ def identificar_dependencias(conteudo, tecnologias):
             + r"(?![a-zA-Z0-9_-])"
         )
 
-        if re.search(padrao, conteudo, re.IGNORECASE):
+        if re.search(
+            padrao,
+            conteudo,
+            re.IGNORECASE,
+        ):
             tecnologias.add(tecnologia)
 
 
 def detectar_stack(repositorio):
-    repositorio = normalizar_repositorio(repositorio)
+    repositorio = normalizar_repositorio(
+        repositorio
+    )
+
     metadados = requisitar_github(
         f"/repos/{repositorio}"
     )
@@ -177,12 +277,20 @@ def detectar_stack(repositorio):
     if metadados.get("private"):
         raise HTTPException(
             status_code=400,
-            detail="Somente repositórios públicos são suportados.",
+            detail=(
+                "Somente repositórios públicos "
+                "são suportados."
+            ),
         )
 
-    branch = metadados.get("default_branch", "main")
+    branch = metadados.get(
+        "default_branch",
+        "main",
+    )
+
     branch_codificada = urllib.parse.quote(
-        branch, safe=""
+        branch,
+        safe="",
     )
 
     arvore = requisitar_github(
@@ -193,7 +301,10 @@ def detectar_stack(repositorio):
     if arvore.get("truncated"):
         raise HTTPException(
             status_code=422,
-            detail="Repositório muito grande para análise completa.",
+            detail=(
+                "Repositório muito grande "
+                "para análise completa."
+            ),
         )
 
     arquivos = [
@@ -205,7 +316,10 @@ def detectar_stack(repositorio):
     if len(arquivos) > MAX_ARQUIVOS:
         raise HTTPException(
             status_code=422,
-            detail="Quantidade de arquivos acima do limite.",
+            detail=(
+                "Quantidade de arquivos "
+                "acima do limite."
+            ),
         )
 
     tecnologias = set()
@@ -213,7 +327,10 @@ def detectar_stack(repositorio):
 
     for caminho in arquivos:
         nome = caminho.rsplit("/", 1)[-1].lower()
-        extensao = "." + nome.rsplit(".", 1)[-1]
+
+        extensao = (
+            "." + nome.rsplit(".", 1)[-1]
+        )
 
         for tecnologia, regras in TECNOLOGIAS.items():
             if (
@@ -244,8 +361,15 @@ def detectar_stack(repositorio):
             "requirements.txt",
             "pyproject.toml",
         }:
-            conteudo = ler_arquivo(repositorio, caminho)
-            identificar_dependencias(conteudo, tecnologias)
+            conteudo = ler_arquivo(
+                repositorio,
+                caminho,
+            )
+
+            identificar_dependencias(
+                conteudo,
+                tecnologias,
+            )
 
     return {
         "repositorio": repositorio,

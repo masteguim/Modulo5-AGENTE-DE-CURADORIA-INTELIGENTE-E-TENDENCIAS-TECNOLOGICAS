@@ -2,7 +2,10 @@
 __pycache__/
 *.py[codz]
 *$py.class
-
+# Banco de dados SQLite
+*.db
+*.db-shm
+*.db-wal
 # C extensions
 *.so
 
@@ -223,3 +226,7 @@ __marimo__/
 .streamlit/secrets.toml
 .env
 .idea/
+# Banco de dados SQLite
+*.db
+*.db-shm
+*.db-wal
