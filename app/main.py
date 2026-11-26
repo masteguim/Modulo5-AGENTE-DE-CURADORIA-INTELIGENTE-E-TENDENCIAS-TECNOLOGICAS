@@ -1,4 +1,8 @@
-
+from app.database import (
+    salvar_repositorio_usuario,
+    listar_repositorios_usuario,
+    listar_recomendacoes_usuario,
+)
 import json
 import logging
 import re
@@ -1136,3 +1140,98 @@ def consultar_recomendacoes_projeto(
         "project_id": str(project_id),
         "recomendacoes": recomendacoes,
     }
+
+@app.post("/github/repositorios")
+def registrar_repositorio_usuario(
+    dados: RepositorioEntrada,
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    try:
+        resultado = gerar_feed("geral", dados.repositorio)
+        stack = resultado["stack_detectada"]
+        artigos = resultado["artigos"]
+
+        recomendacoes = {}
+
+        for tecnologia in stack:
+            termos = termos_repositorio([tecnologia])
+
+            artigos_correspondentes = [
+                artigo
+                for artigo in artigos
+                if any(
+                    corresponde_termo(
+                        normalizar(
+                            (artigo.get("titulo") or "")
+                            + " "
+                            + (artigo.get("resumo") or "")
+                        ),
+                        termo,
+                    )
+                    for termo in termos
+                )
+            ]
+
+            # Salva apenas artigos relacionados à tecnologia.
+            # Não atribui notícias genéricas a uma tecnologia sem correspondência.
+            recomendacoes[tecnologia] = artigos_correspondentes[:10]
+        persistencia = salvar_repositorio_usuario(
+            subject=usuario.subject,
+            repositorio_url=(
+                f"https://github.com/{resultado['repositorio']}"
+            ),
+            stack=stack,
+            recomendacoes=recomendacoes,
+        )
+
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao salvar integração GitHub.")
+        raise HTTPException(
+            status_code=503,
+            detail="Erro ao salvar o repositório no banco.",
+        ) from erro
+
+    return {
+        "repositorio": resultado["repositorio"],
+        "stack_detectada": stack,
+        "recomendacoes": [
+            {
+                "tecnologia": tecnologia,
+                "artigos": recomendacoes[tecnologia],
+            }
+            for tecnologia in stack
+        ],
+        "persistencia": persistencia,
+    }
+
+
+@app.get("/github/repositorios")
+def consultar_repositorios_usuario(
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    try:
+        repositorios = listar_repositorios_usuario(usuario.subject)
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao listar repositórios.")
+        raise HTTPException(
+            status_code=503,
+            detail="Erro ao consultar repositórios.",
+        ) from erro
+
+    return {"repositorios": repositorios}
+
+
+@app.get("/github/recomendacoes")
+def consultar_recomendacoes_usuario(
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    try:
+        recomendacoes = listar_recomendacoes_usuario(usuario.subject)
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao listar recomendações.")
+        raise HTTPException(
+            status_code=503,
+            detail="Erro ao consultar recomendações.",
+        ) from erro
+
+    return {"recomendacoes": recomendacoes}
