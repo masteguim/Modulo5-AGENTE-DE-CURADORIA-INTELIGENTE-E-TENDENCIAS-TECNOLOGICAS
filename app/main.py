@@ -1149,7 +1149,9 @@ def registrar_repositorio_usuario(
     try:
         resultado = gerar_feed("geral", dados.repositorio)
         stack = resultado["stack_detectada"]
-        artigos = resultado["artigos"]
+
+        # Buscar todos os artigos armazenados no PostgreSQL
+        artigos = listar_artigos(500)
 
         recomendacoes = {}
 
@@ -1175,6 +1177,15 @@ def registrar_repositorio_usuario(
             # Salva apenas artigos relacionados à tecnologia.
             # Não atribui notícias genéricas a uma tecnologia sem correspondência.
             recomendacoes[tecnologia] = artigos_correspondentes[:10]
+            print("\n=== DIAGNÓSTICO DE RECOMENDAÇÕES ===", flush=True)
+            print("Stack detectada:", stack, flush=True)
+            print("Artigos disponíveis:", len(artigos), flush=True)
+
+            for tecnologia, lista in recomendacoes.items():
+                print(
+                    f"{tecnologia}: {len(lista)} recomendações",
+                    flush=True
+                )
         persistencia = salvar_repositorio_usuario(
             subject=usuario.subject,
             repositorio_url=(
