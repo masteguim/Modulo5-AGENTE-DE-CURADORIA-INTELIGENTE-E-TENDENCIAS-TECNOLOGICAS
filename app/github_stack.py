@@ -13,7 +13,6 @@ from threading import Lock
 
 from fastapi import HTTPException
 
-
 logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"

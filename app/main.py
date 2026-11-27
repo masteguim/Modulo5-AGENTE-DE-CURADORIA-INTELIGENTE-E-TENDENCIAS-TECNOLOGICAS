@@ -1,8 +1,3 @@
-from app.database import (
-    salvar_repositorio_usuario,
-    listar_repositorios_usuario,
-    listar_recomendacoes_usuario,
-)
 import json
 import logging
 import re
@@ -36,12 +31,15 @@ from app.database import (
     listar_artigos,
     listar_conversas,
     listar_recomendacoes_projeto,
+    listar_recomendacoes_usuario,
     listar_repositorios_projeto,
+    listar_repositorios_usuario,
     obter_contexto_conversa,
     obter_conversa,
     registrar_consulta,
     registrar_resposta_assistente,
     salvar_repositorio_projeto,
+    salvar_repositorio_usuario,
 )
 from app.em_alta import gerar_em_alta
 from app.feed_contextual import gerar_feed_contextual
