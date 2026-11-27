@@ -1,209 +1,227 @@
-# Curadoria Inteligente — Módulo 5
+# Módulo 5 — Agente de Curadoria Inteligente e Tendências Tecnológicas | Backend
 
-API do agente de curadoria de tendências tecnológicas.
+API REST desenvolvida em **Python e FastAPI** para o Módulo 5 do projeto de Engenharia de Software. O serviço reúne conteúdos sobre tecnologia, gera feeds e tendências, analisa a stack de repositórios GitHub e persiste informações em PostgreSQL.
 
-## Executar localmente
+## Links
 
-Instale as dependências:
+- **API publicada (Azure App Service):** https://agente-tendencias-tecnologicas-fyd3bzerc9a2cqcu.chilecentral-01.azurewebsites.net
+- **Swagger / documentação interativa:** https://agente-tendencias-tecnologicas-fyd3bzerc9a2cqcu.chilecentral-01.azurewebsites.net/docs
+- **Frontend publicado:** https://frontmodulo5-ecaqg8fghzhyeuh2.brazilsouth-01.azurewebsites.net/
+- **Repositório do frontend:** https://github.com/Aruak-Malta/Modulo5-CURADORIA-INTELIGENTE-E-TENDENCIAS-TECNOLOGICAS
 
-```powershell
+> A disponibilidade dos serviços publicados depende do status e dos limites do respectivo plano de hospedagem.
+
+## Funcionalidades
+
+- **Curadoria de conteúdos:** consulta e seleção de artigos e notícias de fontes externas de tecnologia.
+- **Feed por categoria:** seleção e ranqueamento de publicações conforme assunto e contexto tecnológico.
+- **Em Alta:** classificação e apresentação de conteúdos em destaque.
+- **GitHub:** identificação da stack, leitura de dependências e análise de alterações recentes em repositórios.
+- **Recomendações:** associação de publicações relevantes às tecnologias encontradas nos repositórios.
+- **Alertas e segurança:** recursos de monitoramento e análise de vulnerabilidades.
+- **Persistência:** artigos, usuários referenciados externamente, conversas, conteúdos, integrações GitHub, tecnologias e recomendações.
+- **Integrações entre módulos:** autenticação delegada ao Módulo 1, verificação de acesso a projetos e integração do assistente com o Módulo 7.
+
+**Delimitação arquitetural:** o chat/assistente de IA pertence a outro módulo (Módulo 7). O Módulo 5 disponibiliza funcionalidades de curadoria e integrações; o sistema completo prevê um microfrontend integrador para conectar os módulos.
+
+## Tecnologias
+
+| Camada | Tecnologia |
+|---|---|
+| API REST | FastAPI, Pydantic |
+| Servidor ASGI | Uvicorn, Gunicorn |
+| Persistência | PostgreSQL, SQLAlchemy, psycopg 3 |
+| Migrações | Alembic |
+| Integrações HTTP | HTTPX e APIs externas |
+| Autenticação | JWT, JWKS; identidade delegada ao Módulo 1 |
+| Qualidade | Pytest, Ruff, GitHub Actions |
+| Hospedagem | Azure App Service |
+| Banco gerenciado | Neon PostgreSQL |
+
+## Arquitetura simplificada
+
+```text
+Frontend React/Vite (Módulo 5)
+             |
+             | HTTP / JSON
+             v
+      Backend FastAPI (Módulo 5)
+       |       |        |
+       |       |        +-- GitHub e fontes externas
+       |       +----------- PostgreSQL (Neon)
+       +------------------- Integrações: Módulo 1 / projetos / Módulo 7
+
+Microfrontend integrador do sistema completo: conecta os módulos.
+```
+
+## Estrutura do projeto
+
+```text
+.
+├── app/
+│   ├── main.py                 # Aplicação FastAPI, rotas e integrações
+│   ├── database.py             # Conexão e operações no PostgreSQL
+│   ├── models.py               # Modelos SQLAlchemy
+│   ├── schemas.py              # Esquemas de dados
+│   ├── curadoria.py            # Curadoria de conteúdos
+│   ├── em_alta.py              # Conteúdos em destaque
+│   ├── github_stack.py         # Identificação de tecnologias GitHub
+│   ├── monitoramento.py        # Monitoramento de alterações
+│   ├── recomendacoes.py        # Recomendações contextuais
+│   ├── auth.py                 # Integração de autenticação
+│   ├── integracoes.py          # Comunicação entre módulos
+│   └── vulnerabilidades_router.py
+├── migrations/                 # Migrações do Alembic
+├── test/                       # Testes automatizados
+├── .github/workflows/          # Pipeline CI/CD
+├── alembic.ini
+├── requirements.txt
+├── requirements-dev.txt
+└── Dockerfile
+```
+
+## Requisitos
+
+- Python 3.12 ou versão compatível com as dependências do projeto;
+- PostgreSQL acessível (por exemplo, banco Neon ou instância local);
+- Git;
+- Credenciais de serviços externos quando exigidas pelas funcionalidades utilizadas.
+
+## Executar localmente (Linux)
+
+Clone o repositório e acesse a pasta:
+
+```bash
+git clone https://github.com/masteguim/Modulo5-AGENTE-DE-CURADORIA-INTELIGENTE-E-TENDENCIAS-TECNOLOGICAS.git
+cd Modulo5-AGENTE-DE-CURADORIA-INTELIGENTE-E-TENDENCIAS-TECNOLOGICAS
+```
+
+> O desenvolvimento e as últimas correções foram realizados na branch `branchlucas`. Para reproduzir essa versão, execute `git switch branchlucas` após clonar.
+
+Crie o ambiente virtual e instale as dependências:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-Configure a conexão local uma vez:
+Crie um arquivo `.env` na raiz e configure a **sua própria** conexão PostgreSQL:
 
-```powershell
-Copy-Item .env.example .env
+```dotenv
+DATABASE_URL=postgresql+psycopg://USUARIO:SENHA@HOST_DO_NEON/neondb?sslmode=require
 ```
 
-Abra `.env`, substitua o valor de `DATABASE_URL` pela URI **Session Pooler**
-do Supabase e salve. O arquivo `.env` é local e ignorado pelo Git; não o
-compartilhe nem faça commit.
+Use a **connection string direta** fornecida pelo Neon, com `postgresql+psycopg://`. Nunca publique credenciais reais no GitHub.
 
-Como o schema já foi criado pelo SQL Editor, atualize-o com:
+Para preparar **um banco novo e vazio**, aplique as migrações:
 
-```powershell
+```bash
 python -m alembic upgrade head
 python -m alembic current
 ```
 
-O resultado esperado é `0004_remove_unused_columns (head)`.
+Se estiver usando um banco Neon já migrado, **não restaure nem recrie as tabelas**: basta configurar `DATABASE_URL` corretamente.
 
-Para iniciar a API:
+Inicie a aplicação:
 
-```powershell
-python -m uvicorn app.main:app --reload
+```bash
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-O backend e o Alembic leem essa configuração do `.env` automaticamente.
+Acesse http://127.0.0.1:8000/docs.
 
-A documentação interativa fica em <http://127.0.0.1:8000/docs>.
+### Execução com Gunicorn
 
-Para usar o cliente de terminal do MVP:
-
-```powershell
-$env:M1_ACCESS_TOKEN = "<access_token individual do Módulo 1>"
-python -m app.cli
-Remove-Item Env:M1_ACCESS_TOKEN
+```bash
+gunicorn -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 app.main:app
 ```
 
-## Banco PostgreSQL no Supabase
+## Principais endpoints
 
-O projeto usa PostgreSQL padrão com SQLAlchemy, `psycopg` e migrações Alembic;
-não depende de recursos exclusivos do Azure nem do SDK do Supabase. O schema
-inclui usuários referenciados pelo identificador externo, chats, conteúdos,
-integrações GitHub, tecnologias e recomendações. Senhas de usuário não são
-armazenadas.
+| Método | Endpoint | Finalidade |
+|---|---|---|
+| `GET` | `/` | Status e quantidade de artigos armazenados |
+| `GET` | `/artigos` | Consultar artigos persistidos |
+| `GET` | `/categorias` | Listar categorias de curadoria |
+| `GET` | `/feed` | Feed por categoria e, opcionalmente, repositório |
+| `GET` | `/em-alta` | Conteúdos em destaque |
+| `GET` | `/alertas` | Alertas relacionados à stack tecnológica |
+| `GET` | `/github/stack` | Identificar tecnologias de um repositório |
+| `GET` | `/github/alteracoes` | Consultar alterações recentes no GitHub |
+| `POST` | `/github/repositorios` | Salvar integração GitHub do usuário |
+| `GET` | `/github/repositorios` | Listar integrações GitHub do usuário |
+| `GET` | `/github/recomendacoes` | Consultar recomendações do usuário |
+| `POST` | `/consultas` | Consultar conteúdos e registrar interação |
+| `POST` | `/assistente` | Integrar consulta ao assistente de outro módulo |
+| `GET` | `/conversas` | Listar histórico de conversas |
+| `GET` | `/conversas/{chat_id}` | Consultar conversa específica |
+| `GET/POST` | `/projetos/{project_id}/repositorios` | Listar ou registrar repositórios de projeto |
+| `GET` | `/projetos/{project_id}/recomendacoes` | Recomendações associadas ao projeto |
+| `POST` | `/auth/login` | Encaminhar login ao Módulo 1 |
+| `POST` | `/auth/mfa/verify` | Validar segundo fator |
+| `POST` | `/auth/refresh` | Renovar token |
+| `POST` | `/auth/logout` | Encerrar sessão |
+| `GET` | `/auth/session` | Consultar sessão autenticada |
 
-No Supabase, crie um projeto PostgreSQL e copie a URI do **Session Pooler** em
-**Connect**. O Session Pooler é a opção recomendada para a API hospedada no
-Azure App Service. A aplicação exige o driver `postgresql+psycopg`; se a URI
-copiada começar com `postgresql://`, troque o prefixo para
-`postgresql+psycopg://`. Mantenha `sslmode=require` e codifique caracteres
-especiais da senha para URL.
+Algumas rotas exigem um JWT válido e, no caso de projetos, autorização de acesso. Consulte `/docs` para verificar parâmetros e esquemas atualizados.
 
-Para criar o schema pelo SQL Editor do Supabase, execute uma única vez o arquivo
-[supabase_schema.sql](./supabase_schema.sql) em um projeto vazio. O script
-também registra a revisão Alembic `0004_remove_unused_columns` e ativa RLS
-nas tabelas da aplicação; não o execute novamente em um banco já migrado.
-Se você já executou uma versão anterior do script, aplique as migrações para
-atualizar o schema, em vez de executar o script novamente.
+### Exemplo de consulta pública
 
-### Status: feito no código
-
-- Conexão PostgreSQL via `DATABASE_URL` e migrações Alembic.
-- Persistência de artigos, consultas e histórico de conversas por usuário.
-- Autenticação com JWT RS256 do Módulo 1, validação por JWKS e confirmação
-  da sessão em `/auth/me`.
-- Proxy de login, MFA, renovação de token e logout do Módulo 1, para o
-  navegador não depender do CORS da API de identidade.
-- Verificação de acesso a projetos pelo endpoint HTTP do Módulo 1; não há
-  acesso ao banco de outro módulo.
-- Chamada autenticada ao `/api/chat` do Módulo 7 e persistência do identificador
-  da conversa externa.
-- Registro de repositórios GitHub, stack e recomendações associadas ao projeto.
-- O CLI usa `M1_ACCESS_TOKEN`; as instruções das rotas estão neste README.
-- Validação local após a integração: 30 testes passaram e Ruff passou.
-
-### Pendente antes de considerar a integração operacional
-
-- Como o SQL anterior já foi executado, aplicar a nova migração ao Supabase
-  com `python -m alembic upgrade head`. Ela remove os quatro campos sem uso e
-  o índice desnecessário. Depois, confirme que
-  `python -m alembic current` retorna `0004_remove_unused_columns (head)`.
-- Configurar a `DATABASE_URL` do Supabase no ambiente da API. O workflow atual
-  do GitHub Actions não injeta essa variável; mantenha-a nas configurações de
-  ambiente do App Service, não no repositório.
-- **Bloqueio separado:** na última verificação, o App Service da API estava
-  com status `Cota excedida` e o Azure respondia `403 - This web app is
-  stopped`. Migrar o banco para Supabase não corrige a cota nem inicia a API;
-  o plano de hospedagem precisa voltar a aceitar requisições.
-- O frontend foi integrado localmente no repositório
-  `Modulo5-CURADORIA-INTELIGENTE-E-TENDENCIAS-TECNOLOGICAS`, mas ainda precisa
-  ser publicado. O login/MFA, Bearer, renovação e histórico só funcionarão em
-  produção depois que API e frontend atualizados estiverem publicados.
-- Fazer um teste integrado real com PostgreSQL no Supabase, Módulo 1 e Módulo
-  7. Os testes locais não acessaram esses serviços.
-- O schema foi simplificado removendo nome/e-mail local do usuário,
-  identificador numérico do repositório, tipo da tecnologia e o índice de data
-  de publicação sem uso nas consultas atuais. A identidade continua
-  referenciada pelo subject externo; o e-mail do perfil vem do Módulo 1.
-
-As recomendações são geradas a partir dos artigos já armazenados; execute o
-coletor para alimentar esses artigos antes de cadastrar um repositório.
-
-### Conferir a migração
-
-Com o `.env` configurado, rode `python -m alembic current`. O resultado
-esperado é `0004_remove_unused_columns (head)`. Se ainda estiver em uma
-revisão anterior, rode `python -m alembic upgrade head`.
-
-Não compartilhe nem salve a senha no repositório. Se ela tiver caracteres
-especiais, use a versão codificada para URL.
-
-### Configuração da conexão da API
-
-Configure a mesma URI do Supabase como `DATABASE_URL` nas configurações de
-ambiente do serviço que hospeda a API. No App Service, use
-**Variáveis de ambiente → Configurações de aplicativo**. Não inclua a senha no
-GitHub, no `.env.example` ou em commits. Se houver restrições de rede no projeto
-Supabase, permita apenas os endereços de saída necessários da API e o endereço
-do computador usado para executar migrações.
-
-### Integração por usuário e projetos
-
-As operações que salvam dados de uma pessoa exigem o token de acesso individual
-do Módulo 1 no cabeçalho `Authorization: Bearer <access_token>`. O backend
-valida RS256, issuer, audience e JWKS e confirma a sessão em `/auth/me`. Ele não
-armazena senha nem aceita token compartilhado. O frontend usa o proxy abaixo
-para o login e mantém os tokens apenas em `sessionStorage`.
-
-O backend usa estes serviços por padrão:
-
-- Identidade: `https://mod1-auth.whitemeadow-deba1090.brazilsouth.azurecontainerapps.io`
-- Assistente: `https://mackai-conversas.calmfield-d7c6c49f.brazilsouth.azurecontainerapps.io`
-
-Opcionalmente, configure `M1_AUTH_URL`, `M1_JWT_ISSUER`,
-`M1_JWT_AUDIENCE`, `M1_JWKS_URL` e `M7_BASE_URL` no ambiente da API.
-
-Rotas integradas:
-
-| Método e rota | Uso |
-| --- | --- |
-| `POST /auth/login` | Encaminha e-mail e senha como formulário para `/auth/token` do Módulo 1 |
-| `POST /auth/mfa/verify` | Encaminha o desafio e um código MFA ou de recuperação |
-| `POST /auth/refresh` | Renova o token por meio do Módulo 1 |
-| `POST /auth/logout` | Encerra a sessão no Módulo 1 |
-| `GET /auth/session` | Confirma a sessão ativa e retorna o perfil básico autenticado |
-| `POST /consultas` | Busca artigos e salva pergunta/resposta no histórico da pessoa |
-| `POST /assistente` | Envia a pergunta ao `POST /api/chat` do Módulo 7 e salva a conversa |
-| `GET /conversas` e `GET /conversas/{chat_id}` | Lista e consulta apenas o histórico da pessoa autenticada |
-| `POST /projetos/{project_id}/repositorios` | Verifica acesso ao projeto no Módulo 1, detecta a stack pública no GitHub e salva o vínculo |
-| `GET /projetos/{project_id}/repositorios` | Lista os repositórios e tecnologias salvos para o projeto |
-| `GET /projetos/{project_id}/recomendacoes` | Lista recomendações persistidas por tecnologia para o projeto |
-
-`project_id` é o UUID da API de Projetos do Módulo 1. O Módulo 5 não acessa o
-banco de outro módulo: verifica acesso por HTTP. A rota de repositórios associa
-ao projeto os artigos de recomendação disponíveis no banco; execute o coletor
-para alimentar os artigos primeiro. Em `/assistente`, envie `project_id` para
-uma conversa de projeto; para continuar uma conversa, envie o `chat_id` local
-retornado pelo Módulo 5. `GET /conversas` sem `project_id` lista conversas
-gerais; para o histórico de um projeto, informe seu UUID na query string.
-Repositórios e recomendações ficam associados ao projeto e são visíveis a
-qualquer pessoa que tenha acesso atual a ele; o histórico de conversas continua
-restrito à pessoa que o criou.
-
-Exemplo local para perguntar ao Módulo 7:
-
-```powershell
-$headers = @{ Authorization = "Bearer $env:M1_ACCESS_TOKEN" }
-$body = @{
-    pergunta = "Resuma a stack deste projeto"
-    project_id = "<UUID do projeto>"
-} | ConvertTo-Json
-
-Invoke-RestMethod `
-    -Uri "http://127.0.0.1:8000/assistente" `
-    -Method Post `
-    -Headers $headers `
-    -ContentType "application/json" `
-    -Body $body
+```bash
+curl "http://127.0.0.1:8000/artigos?limite=5"
 ```
 
-Ordem sugerida para continuar:
+### Exemplo de análise de stack
 
-1. Copie a URI Session Pooler do projeto Supabase e configure `DATABASE_URL`
-   localmente.
-2. Rode `python -m alembic upgrade head` e depois
-   `python -m alembic current`; o esperado é
-   `0004_remove_unused_columns (head)`.
-3. Configure `DATABASE_URL` no ambiente da API. Se continuar no Azure, resolva
-   antes o status `Cota excedida` do App Service.
-4. Publique a API e o frontend, com `VITE_API_URL` apontando para a raiz da API
-   (por exemplo, `https://<host-da-api>`).
-5. Teste login/MFA, `/auth/session`, consulta, histórico e integração GitHub
-   com uma conta individual e um projeto ao qual ela tenha acesso.
-6. Revise as restrições de rede do projeto Supabase para permitir apenas as
-   conexões necessárias.
+```bash
+curl -G "http://127.0.0.1:8000/github/stack" \
+  --data-urlencode "repositorio=facebook/react"
+```
 
-Não compartilhe tokens ou senhas no chat nem os salve no repositório.
+## Banco de dados
+
+O ambiente de hospedagem utiliza **Neon PostgreSQL**, com conexão definida pela variável `DATABASE_URL`. O schema é versionado com Alembic e contém tabelas para artigos, usuários, chats, conteúdos, integrações GitHub, tecnologias e recomendações.
+
+A autenticação de usuários não é implementada diretamente no banco deste módulo: a identidade é delegada ao Módulo 1.
+
+## Testes e qualidade
+
+Para instalar as dependências de desenvolvimento:
+
+```bash
+python -m pip install -r requirements-dev.txt
+```
+
+Executar validações:
+
+```bash
+python -m compileall -q app
+python -m ruff check app test
+python -m pytest -q
+```
+
+O GitHub Actions executa verificações e o fluxo de publicação no Azure conforme a configuração do repositório.
+
+## Publicação no Azure
+
+A aplicação está configurada para execução com Python, Gunicorn e Uvicorn. O comando utilizado no App Service é:
+
+```bash
+gunicorn -w 2 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000 app.main:app
+```
+
+No App Service, configure `DATABASE_URL` em **Settings → Environment variables** usando a URL do Neon com o driver `postgresql+psycopg`. O frontend publicado deve estar autorizado na lista de origens CORS do backend.
+
+**Atenção aos custos:** o plano Azure App Service **B1 é pago**. Revise o plano de hospedagem e os custos ao concluir a apresentação do projeto.
+
+## Segurança
+
+- Não versione `.env`, tokens, senhas, strings de conexão reais ou backups de banco.
+- Mantenha variáveis sensíveis nas configurações de ambiente da hospedagem.
+- Use HTTPS em produção.
+- Utilize autenticação e autorização para acessar informações associadas a usuários e projetos.
+
+## Projeto acadêmico
+
+Desenvolvido no contexto da disciplina de Engenharia de Software — **Módulo 5: Agente de Curadoria Inteligente e Tendências Tecnológicas**.
