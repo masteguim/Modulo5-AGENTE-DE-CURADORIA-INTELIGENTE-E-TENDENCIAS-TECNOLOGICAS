@@ -3,8 +3,8 @@ import gzip
 import json
 import logging
 import os
+import json
 import re
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,11 +37,7 @@ _cache_lock = Lock()
 
 TECNOLOGIAS = {
     "Python": {
-        "arquivos": {
-            "requirements.txt",
-            "pyproject.toml",
-            "pipfile",
-        },
+        "arquivos": {"requirements.txt", "pyproject.toml", "pipfile"},
         "extensoes": {".py"},
     },
     "JavaScript": {
@@ -53,12 +49,7 @@ TECNOLOGIAS = {
         "extensoes": {".ts", ".tsx"},
     },
     "Docker": {
-        "arquivos": {
-            "dockerfile",
-            "docker-compose.yml",
-            "compose.yml",
-            "compose.yaml",
-        },
+        "arquivos": {"dockerfile", "docker-compose.yml", "compose.yml", "compose.yaml"},
         "extensoes": set(),
     },
     "GitHub Actions": {
@@ -176,14 +167,12 @@ def normalizar_repositorio(repositorio):
         )
 
     valor = repositorio.strip()
-
     valor = re.sub(
         r"^https?://github\.com/",
         "",
         valor,
         flags=re.IGNORECASE,
     )
-
     valor = valor.rstrip("/")
 
     if not re.fullmatch(
@@ -277,13 +266,18 @@ def requisitar_github(caminho):
 
     requisicao = urllib.request.Request(
         f"{GITHUB_API}{caminho}",
-        headers=headers,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Agente-Curadoria-Mackenzie",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
     )
 
     try:
         with urllib.request.urlopen(
             requisicao,
             timeout=20,
+            requisicao, timeout=12
         ) as resposta:
             conteudo = resposta.read(MAX_RESPOSTA + 1)
 
@@ -308,6 +302,7 @@ def requisitar_github(caminho):
             salvar_cache(caminho, dados)
 
             return dados
+            return json.loads(conteudo)
 
     except urllib.error.HTTPError as erro:
         if erro.code == 404:
@@ -323,6 +318,7 @@ def requisitar_github(caminho):
             raise HTTPException(
                 status_code=502,
                 detail="Token do GitHub inválido ou expirado.",
+                detail="Repositório não encontrado ou não público.",
             ) from erro
 
         if erro.code in (403, 429):
@@ -332,6 +328,7 @@ def requisitar_github(caminho):
                     "Limite da API do GitHub atingido "
                     "ou acesso temporariamente restrito."
                 ),
+                detail="Limite da API pública do GitHub atingido.",
             ) from erro
 
         logger.warning(
@@ -360,14 +357,12 @@ def requisitar_github(caminho):
 
 def ler_arquivo(repositorio, caminho):
     caminho_codificado = urllib.parse.quote(
-        caminho,
-        safe="/",
+        caminho, safe="/"
     )
 
     try:
         dados = requisitar_github(
-            f"/repos/{repositorio}/contents/"
-            f"{caminho_codificado}"
+            f"/repos/{repositorio}/contents/{caminho_codificado}"
         )
 
     except HTTPException as erro:
@@ -375,6 +370,8 @@ def ler_arquivo(repositorio, caminho):
             return ""
 
         raise
+    except HTTPException:
+        return ""
 
     if not isinstance(dados, dict):
         return ""
@@ -389,6 +386,8 @@ def ler_arquivo(repositorio, caminho):
 
     if tamanho > MAX_ARQUIVO_CONTEUDO:
         return ""
+
+    import base64
 
     if dados.get("encoding") == "base64":
         try:
@@ -408,6 +407,10 @@ def ler_arquivo(repositorio, caminho):
                 caminho,
             )
 
+            return base64.b64decode(
+                dados.get("content", "")
+            ).decode("utf-8", errors="replace")
+        except (ValueError, TypeError):
             return ""
 
     return ""
@@ -424,18 +427,26 @@ def identificar_dependencias(conteudo, tecnologias):
             + r"(?![a-zA-Z0-9_-])"
         )
 
-        if re.search(
-            padrao,
-            conteudo,
-            re.IGNORECASE,
-        ):
+        if re.search(padrao, conteudo, re.IGNORECASE):
             tecnologias.add(tecnologia)
 
 
 def _listar_arvore_completa(repositorio, branch):
+def detectar_stack(repositorio):
+    repositorio = normalizar_repositorio(repositorio)
+    metadados = requisitar_github(
+        f"/repos/{repositorio}"
+    )
+
+    if metadados.get("private"):
+        raise HTTPException(
+            status_code=400,
+            detail="Somente repositórios públicos são suportados.",
+        )
+
+    branch = metadados.get("default_branch", "main")
     branch_codificada = urllib.parse.quote(
-        branch,
-        safe="",
+        branch, safe=""
     )
 
     arvore = requisitar_github(
@@ -447,6 +458,8 @@ def _listar_arvore_completa(repositorio, branch):
         raise HTTPException(
             status_code=502,
             detail="Estrutura de arquivos inválida do GitHub.",
+            status_code=422,
+            detail="Repositório muito grande para análise completa.",
         )
 
     if arvore.get("truncated"):
@@ -617,6 +630,9 @@ def _obter_arquivos_repositorio(repositorio, branch, tamanho_kb):
         arquivos = _listar_arvore_parcial(
             repositorio,
             branch,
+        raise HTTPException(
+            status_code=422,
+            detail="Quantidade de arquivos acima do limite.",
         )
 
     return arquivos, analise_parcial
@@ -634,6 +650,7 @@ def _analisar_caminhos(repositorio, arquivos):
             if "." in nome
             else ""
         )
+        extensao = "." + nome.rsplit(".", 1)[-1]
 
         for tecnologia, regras in TECNOLOGIAS.items():
             if (
@@ -674,6 +691,13 @@ def _analisar_caminhos(repositorio, arquivos):
                 conteudo,
                 tecnologias,
             )
+        if nome in {
+            "package.json",
+            "requirements.txt",
+            "pyproject.toml",
+        }:
+            conteudo = ler_arquivo(repositorio, caminho)
+            identificar_dependencias(conteudo, tecnologias)
 
         except HTTPException as erro:
             # Se o GitHub ficar temporariamente
