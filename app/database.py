@@ -500,3 +500,136 @@ def listar_repositorios_projeto(
             }
             for integracao in integrations
         ]
+
+def salvar_repositorio_usuario(
+    subject: str,
+    repositorio_url: str,
+    stack,
+    recomendacoes,
+):
+    with _get_session_factory().begin() as database:
+        usuario = _obter_ou_criar_usuario(database, subject)
+
+        integracao = database.scalar(
+            select(IntegracaoGitHub).where(
+                IntegracaoGitHub.usuario_id == usuario.id_usuario,
+                IntegracaoGitHub.project_id.is_(None),
+                IntegracaoGitHub.repositorio_url == repositorio_url,
+            )
+        )
+
+        if integracao is None:
+            chat = Chat(
+                usuario_id=usuario.id_usuario,
+                titulo=f"GitHub: {repositorio_url.rsplit('/', 1)[-1]}"[:255],
+                project_id=None,
+            )
+            database.add(chat)
+            database.flush()
+
+            integracao = IntegracaoGitHub(
+                usuario_id=usuario.id_usuario,
+                chat_id=chat.id_chat,
+                project_id=None,
+                repositorio_url=repositorio_url,
+            )
+            database.add(integracao)
+            database.flush()
+        else:
+            for tecnologia in list(integracao.tecnologias):
+                database.delete(tecnologia)
+            database.flush()
+
+        total = 0
+
+        for nome in dict.fromkeys(stack):
+            tecnologia = Tecnologia(
+                github_id=integracao.id_github,
+                nome=nome,
+            )
+            database.add(tecnologia)
+            database.flush()
+
+            for artigo in recomendacoes.get(nome, []):
+                database.add(
+                    Recomendacao(
+                        tecnologia_id=tecnologia.id_tecnologia,
+                        idioma=artigo.get("idioma"),
+                        fonte=artigo.get("fonte"),
+                        titulo=artigo["titulo"],
+                        arquivo=artigo["link"],
+                    )
+                )
+                total += 1
+
+        return {
+            "github_id": integracao.id_github,
+            "tecnologias": len(set(stack)),
+            "recomendacoes": total,
+        }
+
+
+def listar_repositorios_usuario(subject: str):
+    with _get_session_factory()() as database:
+        integracoes = database.scalars(
+            select(IntegracaoGitHub)
+            .join(
+                Usuario,
+                IntegracaoGitHub.usuario_id == Usuario.id_usuario,
+            )
+            .where(
+                Usuario.identificador_externo == subject,
+                IntegracaoGitHub.project_id.is_(None),
+            )
+            .order_by(IntegracaoGitHub.criado_em.desc())
+        ).all()
+
+        return [
+            {
+                "repositorio": integracao.repositorio_url,
+                "stack_detectada": [
+                    tecnologia.nome
+                    for tecnologia in integracao.tecnologias
+                ],
+                "adicionado_em": integracao.criado_em.isoformat(),
+            }
+            for integracao in integracoes
+        ]
+
+
+def listar_recomendacoes_usuario(subject: str):
+    statement = (
+        select(Recomendacao, Tecnologia)
+        .join(
+            Tecnologia,
+            Recomendacao.tecnologia_id == Tecnologia.id_tecnologia,
+        )
+        .join(
+            IntegracaoGitHub,
+            Tecnologia.github_id == IntegracaoGitHub.id_github,
+        )
+        .join(
+            Usuario,
+            IntegracaoGitHub.usuario_id == Usuario.id_usuario,
+        )
+        .where(
+            Usuario.identificador_externo == subject,
+            IntegracaoGitHub.project_id.is_(None),
+        )
+        .order_by(Recomendacao.criado_em.desc())
+    )
+
+    with _get_session_factory()() as database:
+        registros = database.execute(statement).all()
+
+        return [
+            {
+                "tecnologia": tecnologia.nome,
+                "titulo": recomendacao.titulo,
+                "idioma": recomendacao.idioma,
+                "fonte": recomendacao.fonte,
+                "link": recomendacao.arquivo,
+                "criado_em": recomendacao.criado_em.isoformat(),
+            }
+            for recomendacao, tecnologia in registros
+        ]

@@ -30,12 +30,15 @@ from app.database import (
     listar_artigos,
     listar_conversas,
     listar_recomendacoes_projeto,
+    listar_recomendacoes_usuario,
     listar_repositorios_projeto,
+    listar_repositorios_usuario,
     obter_contexto_conversa,
     obter_conversa,
     registrar_consulta,
     registrar_resposta_assistente,
     salvar_repositorio_projeto,
+    salvar_repositorio_usuario,
 )
 from app.em_alta import gerar_em_alta
 from app.github_stack import detectar_stack
@@ -1109,3 +1112,109 @@ def consultar_recomendacoes_projeto(
         "project_id": str(project_id),
         "recomendacoes": recomendacoes,
     }
+
+@app.post("/github/repositorios")
+def registrar_repositorio_usuario(
+    dados: RepositorioEntrada,
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    try:
+        resultado = gerar_feed("geral", dados.repositorio)
+        stack = resultado["stack_detectada"]
+
+        # Buscar todos os artigos armazenados no PostgreSQL
+        artigos = listar_artigos(500)
+
+        recomendacoes = {}
+
+        for tecnologia in stack:
+            termos = termos_repositorio([tecnologia])
+
+            artigos_correspondentes = [
+                artigo
+                for artigo in artigos
+                if any(
+                    corresponde_termo(
+                        normalizar(
+                            (artigo.get("titulo") or "")
+                            + " "
+                            + (artigo.get("resumo") or "")
+                        ),
+                        termo,
+                    )
+                    for termo in termos
+                )
+            ]
+
+            # Salva apenas artigos relacionados à tecnologia.
+            # Não atribui notícias genéricas a uma tecnologia sem correspondência.
+            recomendacoes[tecnologia] = artigos_correspondentes[:10]
+            print("\n=== DIAGNÓSTICO DE RECOMENDAÇÕES ===", flush=True)
+            print("Stack detectada:", stack, flush=True)
+            print("Artigos disponíveis:", len(artigos), flush=True)
+
+            for tecnologia, lista in recomendacoes.items():
+                print(
+                    f"{tecnologia}: {len(lista)} recomendações",
+                    flush=True
+                )
+        persistencia = salvar_repositorio_usuario(
+            subject=usuario.subject,
+            repositorio_url=(
+                f"https://github.com/{resultado['repositorio']}"
+            ),
+            stack=stack,
+            recomendacoes=recomendacoes,
+        )
+
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao salvar integração GitHub.")
+        raise HTTPException(
+            status_code=503,
+            detail="Erro ao salvar o repositório no banco.",
+        ) from erro
+
+    return {
+        "repositorio": resultado["repositorio"],
+        "stack_detectada": stack,
+        "recomendacoes": [
+            {
+                "tecnologia": tecnologia,
+                "artigos": recomendacoes[tecnologia],
+            }
+            for tecnologia in stack
+        ],
+        "persistencia": persistencia,
+    }
+
+
+@app.get("/github/repositorios")
+def consultar_repositorios_usuario(
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    try:
+        repositorios = listar_repositorios_usuario(usuario.subject)
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao listar repositórios.")
+        raise HTTPException(
+            status_code=503,
+            detail="Erro ao consultar repositórios.",
+        ) from erro
+
+    return {"repositorios": repositorios}
+
+
+@app.get("/github/recomendacoes")
+def consultar_recomendacoes_usuario(
+    usuario: Annotated[AuthenticatedUser, Depends(get_current_user)],
+):
+    try:
+        recomendacoes = listar_recomendacoes_usuario(usuario.subject)
+    except SQLAlchemyError as erro:
+        logger.exception("Falha ao listar recomendações.")
+        raise HTTPException(
+            status_code=503,
+            detail="Erro ao consultar recomendações.",
+        ) from erro
+
+    return {"recomendacoes": recomendacoes}
