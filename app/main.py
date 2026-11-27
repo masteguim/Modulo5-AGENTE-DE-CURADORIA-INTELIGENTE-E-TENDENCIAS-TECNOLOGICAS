@@ -22,7 +22,6 @@ from app.auth import (
     encaminhar_autenticacao_m1,
     get_current_user,
 )
-from app.cliente_ia import router as ia_router
 from app.curadoria import (
     buscar_conteudos,
     extrair_termos,
@@ -44,7 +43,6 @@ from app.database import (
     salvar_repositorio_projeto,
 )
 from app.em_alta import gerar_em_alta
-from app.feed_contextual import gerar_feed_contextual
 from app.github_stack import detectar_stack
 from app.integracoes import (
     perguntar_ao_modulo7,
@@ -67,8 +65,7 @@ app = FastAPI(
     version="3.4.0",
     description=(
         "Curadoria tecnológica, tendências, GitHub, "
-        "monitoramento de alterações, recomendações "
-        "contextuais, segurança e integração com IA."
+        "monitoramento de alterações e segurança."
     ),
     lifespan=lifespan,
 )
@@ -79,26 +76,12 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "https://frontmodulo5-ecaqg8fghzhyeuh2.brazilsouth-01.azurewebsites.net",
-        "https://green-river-02e44e810.2.azurestaticapps.net",
-        "https://mackai-conversas.calmfield-d7c6c49f.brazilsouth.azurecontainerapps.io",
     ],
-    allow_methods=[
-        "GET",
-        "POST",
-        "PUT",
-        "PATCH",
-        "DELETE",
-        "OPTIONS",
-    ],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "X-Request-ID",
-    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(vulnerabilidades_router)
-app.include_router(ia_router)
 
 CATEGORIAS = {
     "inteligencia-artificial": {
@@ -437,7 +420,6 @@ def gerar_feed(categoria, repositorio):
     nome_repositorio = None
     tecnologias_alteradas = []
     termos_alteracoes = []
-    contexto = None
 
     if repositorio:
         contexto = obter_contexto_repositorio(
@@ -456,14 +438,6 @@ def gerar_feed(categoria, repositorio):
         ]
 
     artigos_banco = listar_artigos(500)
-
-    if repositorio:
-        return gerar_feed_contextual(
-            categoria=categoria,
-            contexto=contexto,
-            artigos_banco=artigos_banco,
-            limite=10 if categoria == "geral" else 5,
-        )
 
     termos_categoria = CATEGORIAS.get(
         categoria, {}

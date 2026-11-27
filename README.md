@@ -10,11 +10,32 @@ Instale as dependências:
 python -m pip install -r requirements.txt
 ```
 
+Configure a conexão local uma vez:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Abra `.env`, substitua o valor de `DATABASE_URL` pela URI **Session Pooler**
+do Supabase e salve. O arquivo `.env` é local e ignorado pelo Git; não o
+compartilhe nem faça commit.
+
+Como o schema já foi criado pelo SQL Editor, atualize-o com:
+
+```powershell
+python -m alembic upgrade head
+python -m alembic current
+```
+
+O resultado esperado é `0004_remove_unused_columns (head)`.
+
 Para iniciar a API:
 
 ```powershell
 python -m uvicorn app.main:app --reload
 ```
+
+O backend e o Alembic leem essa configuração do `.env` automaticamente.
 
 A documentação interativa fica em <http://127.0.0.1:8000/docs>.
 
@@ -26,12 +47,27 @@ python -m app.cli
 Remove-Item Env:M1_ACCESS_TOKEN
 ```
 
-## Banco PostgreSQL no Azure
+## Banco PostgreSQL no Supabase
 
-O projeto usa **Azure Database for PostgreSQL Flexible Server** e migrações
-Alembic. O schema inclui usuários referenciados pelo identificador externo,
-chats, conteúdos, integrações GitHub, tecnologias e recomendações. Senhas de
-usuário não são armazenadas.
+O projeto usa PostgreSQL padrão com SQLAlchemy, `psycopg` e migrações Alembic;
+não depende de recursos exclusivos do Azure nem do SDK do Supabase. O schema
+inclui usuários referenciados pelo identificador externo, chats, conteúdos,
+integrações GitHub, tecnologias e recomendações. Senhas de usuário não são
+armazenadas.
+
+No Supabase, crie um projeto PostgreSQL e copie a URI do **Session Pooler** em
+**Connect**. O Session Pooler é a opção recomendada para a API hospedada no
+Azure App Service. A aplicação exige o driver `postgresql+psycopg`; se a URI
+copiada começar com `postgresql://`, troque o prefixo para
+`postgresql+psycopg://`. Mantenha `sslmode=require` e codifique caracteres
+especiais da senha para URL.
+
+Para criar o schema pelo SQL Editor do Supabase, execute uma única vez o arquivo
+[supabase_schema.sql](./supabase_schema.sql) em um projeto vazio. O script
+também registra a revisão Alembic `0004_remove_unused_columns` e ativa RLS
+nas tabelas da aplicação; não o execute novamente em um banco já migrado.
+Se você já executou uma versão anterior do script, aplique as migrações para
+atualizar o schema, em vez de executar o script novamente.
 
 ### Status: feito no código
 
@@ -51,63 +87,48 @@ usuário não são armazenadas.
 
 ### Pendente antes de considerar a integração operacional
 
-- O servidor e o banco `curadoria` já foram criados no Azure. A última
-  confirmação registrada indicava a migração `0001_create_curadoria_schema`;
-  não foi confirmado que `0002` e `0003` tenham sido aplicadas.
-- Publicar a versão atualizada da API no Azure, incluindo o proxy de
-  autenticação, e confirmar que o App Service tem `DATABASE_URL` configurada.
+- Como o SQL anterior já foi executado, aplicar a nova migração ao Supabase
+  com `python -m alembic upgrade head`. Ela remove os quatro campos sem uso e
+  o índice desnecessário. Depois, confirme que
+  `python -m alembic current` retorna `0004_remove_unused_columns (head)`.
+- Configurar a `DATABASE_URL` do Supabase no ambiente da API. O workflow atual
+  do GitHub Actions não injeta essa variável; mantenha-a nas configurações de
+  ambiente do App Service, não no repositório.
+- **Bloqueio separado:** na última verificação, o App Service da API estava
+  com status `Cota excedida` e o Azure respondia `403 - This web app is
+  stopped`. Migrar o banco para Supabase não corrige a cota nem inicia a API;
+  o plano de hospedagem precisa voltar a aceitar requisições.
 - O frontend foi integrado localmente no repositório
   `Modulo5-CURADORIA-INTELIGENTE-E-TENDENCIAS-TECNOLOGICAS`, mas ainda precisa
   ser publicado. O login/MFA, Bearer, renovação e histórico só funcionarão em
   produção depois que API e frontend atualizados estiverem publicados.
-- Fazer um teste integrado real com PostgreSQL no Azure, Módulo 1 e Módulo 7.
-  Os testes locais não acessaram esses serviços.
-- Restringir o firewall do PostgreSQL. A regra ampla foi mantida por enquanto
-  a pedido, mas deixa o servidor acessível de qualquer IP IPv4 e não é adequada
-  para produção.
+- Fazer um teste integrado real com PostgreSQL no Supabase, Módulo 1 e Módulo
+  7. Os testes locais não acessaram esses serviços.
+- O schema foi simplificado removendo nome/e-mail local do usuário,
+  identificador numérico do repositório, tipo da tecnologia e o índice de data
+  de publicação sem uso nas consultas atuais. A identidade continua
+  referenciada pelo subject externo; o e-mail do perfil vem do Módulo 1.
 
 As recomendações são geradas a partir dos artigos já armazenados; execute o
 coletor para alimentar esses artigos antes de cadastrar um repositório.
 
 ### Conferir a migração
 
-No terminal do VS Code, na pasta do projeto, configure a URL do banco e consulte
-a versão aplicada:
-
-```powershell
-$env:DATABASE_URL = "postgresql+psycopg://USUARIO:SENHA_CODIFICADA@SERVIDOR.postgres.database.azure.com:5432/curadoria?sslmode=require"
-python -m alembic current
-```
-
-O resultado esperado após atualizar as tabelas é:
-
-```text
-0003_integrate_user_workflows (head)
-```
-
-Se ainda precisar criar ou atualizar as tabelas, execute:
-
-```powershell
-python -m alembic upgrade head
-```
-
-Ao terminar, remova a variável do terminal:
-
-```powershell
-Remove-Item Env:DATABASE_URL
-```
+Com o `.env` configurado, rode `python -m alembic current`. O resultado
+esperado é `0004_remove_unused_columns (head)`. Se ainda estiver em uma
+revisão anterior, rode `python -m alembic upgrade head`.
 
 Não compartilhe nem salve a senha no repositório. Se ela tiver caracteres
 especiais, use a versão codificada para URL.
 
-### Rede e configuração da API
+### Configuração da conexão da API
 
-O firewall do PostgreSQL deve permitir somente os IPs necessários: o IP do
-computador enquanto executa a migração e os IPs de saída do App Service da API.
-**Não use uma regra que libere todos os IPs da internet.**
-
-Para configurar a conexão no App Service `agente-tendencias-tecnologicas`,
-adicione `DATABASE_URL` nas configurações de ambiente e reinicie o serviço.
+Configure a mesma URI do Supabase como `DATABASE_URL` nas configurações de
+ambiente do serviço que hospeda a API. No App Service, use
+**Variáveis de ambiente → Configurações de aplicativo**. Não inclua a senha no
+GitHub, no `.env.example` ou em commits. Se houver restrições de rede no projeto
+Supabase, permita apenas os endereços de saída necessários da API e o endereço
+do computador usado para executar migrações.
 
 ### Integração por usuário e projetos
 
@@ -171,14 +192,18 @@ Invoke-RestMethod `
 
 Ordem sugerida para continuar:
 
-1. Configure `DATABASE_URL` localmente e rode `python -m alembic upgrade head`.
-2. Rode `python -m alembic current`; o esperado é
-   `0003_integrate_user_workflows (head)`.
-3. Publique a API e configure `DATABASE_URL` no App Service.
-4. Publique o frontend com `VITE_API_URL` apontando para a raiz da API
+1. Copie a URI Session Pooler do projeto Supabase e configure `DATABASE_URL`
+   localmente.
+2. Rode `python -m alembic upgrade head` e depois
+   `python -m alembic current`; o esperado é
+   `0004_remove_unused_columns (head)`.
+3. Configure `DATABASE_URL` no ambiente da API. Se continuar no Azure, resolva
+   antes o status `Cota excedida` do App Service.
+4. Publique a API e o frontend, com `VITE_API_URL` apontando para a raiz da API
    (por exemplo, `https://<host-da-api>`).
 5. Teste login/MFA, `/auth/session`, consulta, histórico e integração GitHub
    com uma conta individual e um projeto ao qual ela tenha acesso.
-6. Restrinja o firewall do PostgreSQL aos IPs necessários.
+6. Revise as restrições de rede do projeto Supabase para permitir apenas as
+   conexões necessárias.
 
 Não compartilhe tokens ou senhas no chat nem os salve no repositório.
